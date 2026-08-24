@@ -22,6 +22,7 @@ server, where only the renderer changes.
 | Camera in | Motion-gated sampling into a vision model, off the turn path |
 | Safety | Keyword crisis guardrail ahead of the model |
 | Consent | Verified record required before any session opens |
+| Synthetic marking | Stream declared AI-generated out of band, with a manifest naming the models and the consent |
 
 Measured on an M3 Max, end of speech to first audio back:
 
@@ -97,6 +98,27 @@ src/avatar/
 apps/web/           Next.js client
 infra/              docker-compose
 ```
+
+## Synthetic-content marking
+
+EU AI Act Article 50 has applied since 2 August 2026 and requires providers of
+systems generating synthetic video to mark output machine-readably. The
+persistent banner in the call UI covers the human-facing half.
+
+The machine-readable half travels **out of band**, as LiveKit participant
+attributes plus a manifest in participant metadata naming every model that
+contributed and the consent record the session ran under.
+
+It is out of band because in-band marking does not work here, which was
+measured rather than assumed: a spatial watermark faint enough to be invisible
+did not survive VP8, and thirty consecutive frames received over a real
+connection decoded to nothing. WebRTC re-encodes everything. The pixel
+watermark in `src/avatar/marking/watermark.py` is kept for media this system
+encodes itself — recordings and exports — and is not applied to the live call.
+
+This is a defensible engineering answer, not a compliance certification. A
+C2PA-conformant signed manifest and counsel review are both still required. The
+manifest uses C2PA assertion vocabulary so that remains a serialisation change.
 
 ## Licensing
 

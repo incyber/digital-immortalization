@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from loguru import logger
@@ -36,6 +37,12 @@ from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.livekit.transport import LiveKitParams, LiveKitTransport
 
 from avatar.config import Settings, get_settings
+from avatar.marking.declare import declare
+from avatar.marking.manifest import (
+    ModelRef,
+    SessionManifest,
+    watermark_payload_for,
+)
 from avatar.persona import build_system_prompt, load_profile
 from avatar.realtime.video_publisher import LiveKitVideoPublisher
 from avatar.realtime.warmup import warm
@@ -82,6 +89,7 @@ def build_pipeline(
     transport: LiveKitTransport,
     profile: dict,
     stage: RendererStage,
+    room_name: str = "unknown",
 ) -> tuple[Pipeline, PipelineTask, SceneState, dict]:
     """Assemble the conversation graph."""
     scene = SceneState()
@@ -130,6 +138,12 @@ def build_pipeline(
             RendererProcessor(stage, avatar_id=profile["id"]),
             # Publishes video directly: Pipecat's LiveKit transport implements
             # video input only. See video_publisher.py.
+            # No watermark_payload here on purpose. WebRTC re-encodes every
+            # frame and a watermark faint enough to be invisible does not
+            # survive VP8 - measured against this pipeline, thirty consecutive
+            # received frames decoded to nothing. Marking the live stream
+            # happens out of band; see marking/declare.py. The pixel watermark
+            # is for media this system encodes itself.
             LiveKitVideoPublisher(
                 lambda: transport._client.room,
                 width=cfg.video_width,
@@ -153,7 +167,14 @@ def build_pipeline(
     return pipeline, task, scene, services
 
 
-async def run_agent(room: str, token: str, profile_path: str, assets_path: str | None) -> None:
+async def run_agent(
+    room: str,
+    token: str,
+    profile_path: str,
+    assets_path: str | None,
+    consent_record_id: str | None = None,
+    rights_holder: str | None = None,
+) -> None:
     cfg = get_settings()
     profile = load_profile(profile_path)
     stage = build_renderer(cfg, assets_path)
@@ -176,7 +197,7 @@ async def run_agent(room: str, token: str, profile_path: str, assets_path: str |
         ),
     )
 
-    _, task, _, services = build_pipeline(cfg, transport, profile, stage)
+    _, task, _, services = build_pipeline(cfg, transport, profile, stage, room_name=room)
 
     @transport.event_handler("on_first_participant_joined")
     async def _on_join(transport, participant):
@@ -191,10 +212,46 @@ async def run_agent(room: str, token: str, profile_path: str, assets_path: str |
     # connecting screen, so this time is free; inside the first turn it is not.
     await warm(cfg, stt=services["stt"], tts=services["tts"])
 
+    manifest = SessionManifest(
+        session_id=room,
+        avatar_id=profile["id"],
+        avatar_display_name=profile["display_name"],
+        consent_record_id=consent_record_id or "unknown",
+        rights_holder=rights_holder or "unknown",
+        started_at=datetime.now(UTC).isoformat(),
+        models=[
+            ModelRef(name=cfg.stt_model, role="speech-to-text"),
+            ModelRef(name=cfg.llm_model, role="language"),
+            ModelRef(name=cfg.tts_voice, role="text-to-speech"),
+            ModelRef(name=cfg.vlm_model, role="vision"),
+            ModelRef(name=cfg.renderer_backend, role="renderer"),
+        ],
+        watermark_payload=watermark_payload_for(room).hex(),
+    )
+
     logger.info(f"agent joining room {room}")
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(task)
-    await runner.run()
+
+    # Declare the stream synthetic before any media flows. This travels on the
+    # signalling channel, so unlike a pixel watermark it is not destroyed by
+    # the video codec - see marking/declare.py.
+    async def declare_when_connected() -> None:
+        for _ in range(60):
+            try:
+                room_obj = transport._client.room
+                await declare(room_obj.local_participant, manifest)
+                return
+            except Exception:  # noqa: BLE001 - retried below
+                await asyncio.sleep(0.25)
+        logger.error("never managed to declare this stream as synthetic")
+
+    declare_task = asyncio.create_task(declare_when_connected())
+
+    try:
+        await runner.run()
+    finally:
+        declare_task.cancel()
 
 
 def main() -> None:
@@ -203,13 +260,24 @@ def main() -> None:
     parser.add_argument("--token", default=os.environ.get("LIVEKIT_TOKEN", ""))
     parser.add_argument("--profile", default="src/avatar/profiles/colon.json")
     parser.add_argument("--assets", default=None)
+    parser.add_argument("--consent-record", default=None)
+    parser.add_argument("--rights-holder", default=None)
     args = parser.parse_args()
 
     if not args.token:
         print("a room token is required (--token or LIVEKIT_TOKEN)", file=sys.stderr)
         raise SystemExit(2)
 
-    asyncio.run(run_agent(args.room, args.token, args.profile, args.assets))
+    asyncio.run(
+        run_agent(
+            args.room,
+            args.token,
+            args.profile,
+            args.assets,
+            consent_record_id=args.consent_record,
+            rights_holder=args.rights_holder,
+        )
+    )
 
 
 if __name__ == "__main__":

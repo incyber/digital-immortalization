@@ -16,10 +16,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import numpy as np
 from livekit import rtc
 from loguru import logger
 from pipecat.frames.frames import CancelFrame, EndFrame, Frame, OutputImageRawFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+from avatar.marking.watermark import embed
 
 # LiveKit takes RGBA; the renderer produces RGB24. One alpha byte per pixel is
 # appended per frame rather than having the renderer carry an alpha channel it
@@ -41,8 +44,14 @@ class LiveKitVideoPublisher(FrameProcessor):
         height: int,
         fps: int,
         track_name: str = "avatar",
+        watermark_payload: bytes | None = None,
     ):
         super().__init__()
+        # Marking happens here, at the last point before pixels leave the
+        # process, so there is no path by which a frame reaches a viewer
+        # unmarked - including idle frames, which are just as synthetic as
+        # spoken ones.
+        self._watermark_payload = watermark_payload
         # A callable, not a room: the transport has no room object until it has
         # connected, and the pipeline is assembled before that happens.
         self._room_provider = room_provider
@@ -52,6 +61,7 @@ class LiveKitVideoPublisher(FrameProcessor):
         self._track_name = track_name
         self._source: rtc.VideoSource | None = None
         self._published = False
+        self._mark_failed = False
 
     async def _ensure_track(self) -> None:
         """Create and publish the track once, on the first frame.
@@ -115,10 +125,25 @@ class LiveKitVideoPublisher(FrameProcessor):
         assert self._source is not None
 
         width, height = frame.size
+        image = frame.image
+
+        if self._watermark_payload is not None:
+            try:
+                rgb = np.frombuffer(image, dtype=np.uint8).reshape(height, width, 3)
+                image = embed(rgb, self._watermark_payload).tobytes()
+            except Exception as exc:  # noqa: BLE001
+                # A frame that cannot be marked is not published. Article 50 is
+                # an obligation on the output, so dropping the frame is the
+                # conservative failure: video degrades, audio is untouched.
+                if not self._mark_failed:
+                    self._mark_failed = True
+                    logger.error(f"cannot mark frame as synthetic, dropping video: {exc}")
+                return
+
         rgba = bytearray(width * height * 4)
-        rgba[0::4] = frame.image[0::3]
-        rgba[1::4] = frame.image[1::3]
-        rgba[2::4] = frame.image[2::3]
+        rgba[0::4] = image[0::3]
+        rgba[1::4] = image[1::3]
+        rgba[2::4] = image[2::3]
         rgba[3::4] = b"\xff" * (width * height)
 
         self._source.capture_frame(rtc.VideoFrame(width, height, _RGBA, bytes(rgba)))

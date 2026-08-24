@@ -69,3 +69,23 @@ async def test_no_agent_is_dispatched_when_consent_is_refused(db, cfg, avatar):
     with pytest.raises(ConsentError):
         await open_session(db, cfg, avatar.id, dispatcher)
     assert dispatcher.calls == [], "a refused call must never put an agent in a room"
+
+
+async def test_visitor_tokens_cannot_rewrite_the_synthetic_declaration(cfg):
+    # The declaration says the stream is AI-generated. A visitor able to edit
+    # participant metadata could remove it.
+    import jwt
+
+    token = mint_token(cfg, room="call-abc", identity="human-1", name="Visitor")
+    claims = jwt.decode(token, cfg.livekit_api_secret, algorithms=["HS256"])
+    assert not claims["video"].get("canUpdateOwnMetadata", False)
+
+
+async def test_agent_tokens_may_publish_the_declaration(cfg):
+    import jwt
+
+    token = mint_token(
+        cfg, room="call-abc", identity="avatar-x", name="Avatar", can_update_metadata=True
+    )
+    claims = jwt.decode(token, cfg.livekit_api_secret, algorithms=["HS256"])
+    assert claims["video"]["canUpdateOwnMetadata"] is True

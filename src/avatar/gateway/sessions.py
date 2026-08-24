@@ -23,11 +23,21 @@ from avatar.gateway.models import Avatar, Session
 TOKEN_TTL = timedelta(hours=2)
 
 
-def mint_token(cfg: Settings, room: str, identity: str, name: str) -> str:
+def mint_token(
+    cfg: Settings,
+    room: str,
+    identity: str,
+    name: str,
+    can_update_metadata: bool = False,
+) -> str:
     """A JWT granting join rights to exactly one room.
 
     Scoped per room rather than per project: a token that leaked would open one
     conversation, not every conversation.
+
+    can_update_metadata is granted only to the agent. It is what allows the
+    synthetic-content declaration to be attached to the published stream, and
+    a visitor has no reason to be able to rewrite it.
     """
     grants = api.VideoGrants(
         room_join=True,
@@ -35,6 +45,7 @@ def mint_token(cfg: Settings, room: str, identity: str, name: str) -> str:
         can_publish=True,
         can_subscribe=True,
         can_publish_data=True,
+        can_update_own_metadata=can_update_metadata,
     )
     return (
         api.AccessToken(cfg.livekit_api_key, cfg.livekit_api_secret)
@@ -58,7 +69,7 @@ async def open_session(
     token exists, and no agent is dispatched for an avatar that has not cleared
     the gate.
     """
-    await assert_consented(db, avatar_id)
+    consent = await assert_consented(db, avatar_id)
 
     avatar = await db.get(Avatar, avatar_id)
     assert avatar is not None  # assert_consented already established this
@@ -69,7 +80,13 @@ async def open_session(
     await db.commit()
 
     if dispatcher is not None:
-        await dispatcher.dispatch(room, avatar_id, avatar.profile_path)
+        await dispatcher.dispatch(
+            room,
+            avatar_id,
+            avatar.profile_path,
+            consent_record_id=consent.id,
+            rights_holder=consent.rights_holder_name,
+        )
 
     return {
         "session_id": session.id,

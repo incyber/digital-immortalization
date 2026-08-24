@@ -24,7 +24,14 @@ from avatar.config import Settings
 
 
 class AgentDispatcher(Protocol):
-    async def dispatch(self, room: str, avatar_id: str, profile_path: str) -> None: ...
+    async def dispatch(
+        self,
+        room: str,
+        avatar_id: str,
+        profile_path: str,
+        consent_record_id: str | None = None,
+        rights_holder: str | None = None,
+    ) -> None: ...
 
 
 class LocalProcessDispatcher:
@@ -34,11 +41,24 @@ class LocalProcessDispatcher:
         self._cfg = cfg
         self._processes: dict[str, asyncio.subprocess.Process] = {}
 
-    async def dispatch(self, room: str, avatar_id: str, profile_path: str) -> None:
+    async def dispatch(
+        self,
+        room: str,
+        avatar_id: str,
+        profile_path: str,
+        consent_record_id: str | None = None,
+        rights_holder: str | None = None,
+    ) -> None:
         from avatar.gateway.sessions import mint_token
 
         token = mint_token(
-            self._cfg, room, identity=f"avatar-{avatar_id}", name="Avatar"
+            self._cfg,
+            room,
+            identity=f"avatar-{avatar_id}",
+            name="Avatar",
+            # The agent publishes the synthetic-content declaration as
+            # participant attributes, which the server refuses without this.
+            can_update_metadata=True,
         )
 
         assets = Path(self._cfg.assets_dir) / "avatars" / avatar_id
@@ -50,6 +70,12 @@ class LocalProcessDispatcher:
         ]
         if assets.exists():
             command += ["--assets", str(assets)]
+        # Carried through so the session's synthetic-content declaration can
+        # name the consent it was produced under.
+        if consent_record_id:
+            command += ["--consent-record", consent_record_id]
+        if rights_holder:
+            command += ["--rights-holder", rights_holder]
 
         logger.info(f"dispatching agent into {room}")
         # create_subprocess_exec rather than subprocess.Popen: spawning blocks,
@@ -71,5 +97,12 @@ class NullDispatcher:
     def __init__(self):
         self.calls: list[tuple[str, str, str]] = []
 
-    async def dispatch(self, room: str, avatar_id: str, profile_path: str) -> None:
+    async def dispatch(
+        self,
+        room: str,
+        avatar_id: str,
+        profile_path: str,
+        consent_record_id: str | None = None,
+        rights_holder: str | None = None,
+    ) -> None:
         self.calls.append((room, avatar_id, profile_path))

@@ -89,3 +89,78 @@ async def test_rgb_is_expanded_to_rgba_with_opaque_alpha():
         mod.rtc.VideoSource = original
 
     assert captured["data"] == bytes([10, 20, 30, 255, 40, 50, 60, 255])
+
+
+async def test_frames_are_marked_as_synthetic_before_publishing(collected):
+    """No frame reaches a viewer unmarked. This is the Article 50 obligation."""
+    import numpy as np
+
+    from avatar.marking.watermark import detect
+
+    captured = {}
+
+    class FakeSource:
+        def capture_frame(self, frame):
+            captured["data"] = bytes(frame.data)
+
+    class FakeParticipant:
+        async def publish_track(self, track, options):
+            return None
+
+    class FakeRoom:
+        local_participant = FakeParticipant()
+
+    payload = b"avtr" + bytes([1, 9, 9, 9])
+    p = LiveKitVideoPublisher(lambda: FakeRoom(), 256, 256, 25, watermark_payload=payload)
+
+    rng = np.random.default_rng(3)
+    rgb = rng.integers(60, 200, (256, 256, 3), dtype=np.uint8)
+    frame = OutputImageRawFrame(image=rgb.tobytes(), size=(256, 256), format="RGB")
+
+    import avatar.realtime.video_publisher as mod
+
+    original = mod.rtc.VideoSource
+    mod.rtc.VideoSource = lambda w, h: FakeSource()
+    mod.rtc.LocalVideoTrack.create_video_track = staticmethod(lambda name, source: object())
+    try:
+        await p._capture(frame)
+    finally:
+        mod.rtc.VideoSource = original
+
+    published = np.frombuffer(captured["data"], dtype=np.uint8).reshape(256, 256, 4)
+    assert detect(published[:, :, :3]) == payload
+
+
+async def test_an_unmarkable_frame_is_dropped_rather_than_published(collected):
+    """Publishing an unmarked synthetic frame is the one outcome not allowed."""
+    import numpy as np
+
+    captured = {}
+
+    class FakeSource:
+        def capture_frame(self, frame):
+            captured["called"] = True
+
+    class FakeParticipant:
+        async def publish_track(self, track, options):
+            return None
+
+    class FakeRoom:
+        local_participant = FakeParticipant()
+
+    # 8x8 is below the watermark's minimum block capacity, so embed() raises.
+    p = LiveKitVideoPublisher(lambda: FakeRoom(), 8, 8, 25, watermark_payload=b"avtr\x01\x00\x00\x00")
+    rgb = np.zeros((8, 8, 3), dtype=np.uint8)
+    frame = OutputImageRawFrame(image=rgb.tobytes(), size=(8, 8), format="RGB")
+
+    import avatar.realtime.video_publisher as mod
+
+    original = mod.rtc.VideoSource
+    mod.rtc.VideoSource = lambda w, h: FakeSource()
+    mod.rtc.LocalVideoTrack.create_video_track = staticmethod(lambda name, source: object())
+    try:
+        await p._capture(frame)
+    finally:
+        mod.rtc.VideoSource = original
+
+    assert "called" not in captured, "an unmarkable frame must not be published"

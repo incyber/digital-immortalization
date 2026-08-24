@@ -305,3 +305,74 @@ async def test_the_avatar_can_describe_what_the_camera_shows(cfg):
     assert "scene observation injected into system prompt" in log, (
         "an observation was produced but never reached the model"
     )
+
+
+async def test_the_stream_is_declared_synthetic(cfg):
+    """Article 50 marking, verified on a real connection.
+
+    Deliberately checks participant attributes and metadata, not pixels. An
+    earlier version of this test looked for a spatial watermark in received
+    frames and found nothing in thirty consecutive frames: WebRTC re-encodes
+    everything, and a watermark faint enough to be invisible does not survive
+    VP8. Marking a live stream has to travel out of band.
+    """
+    import json
+
+    from avatar.marking.declare import ATTR_SOURCE_TYPE, ATTR_SYNTHETIC
+    from avatar.marking.manifest import DIGITAL_SOURCE_TYPE
+
+    session = await _open_session()
+
+    room = rtc.Room()
+    declared = asyncio.Event()
+    seen: dict = {}
+
+    def capture(participant) -> None:
+        attributes = dict(participant.attributes or {})
+        # Both halves are required: the flag says the stream is synthetic, the
+        # metadata says what produced it and under whose consent.
+        if attributes.get(ATTR_SYNTHETIC) == "true" and participant.metadata:
+            seen["attributes"] = attributes
+            seen["metadata"] = participant.metadata
+            declared.set()
+
+    @room.on("participant_attributes_changed")
+    def _on_attributes(changed, participant):
+        capture(participant)
+
+    @room.on("participant_metadata_changed")
+    def _on_metadata(old, participant):
+        capture(participant)
+
+    @room.on("participant_connected")
+    def _on_connected(participant):
+        capture(participant)
+
+    token = mint_token(cfg, session["room"], identity="auditor", name="Auditor")
+    await room.connect(cfg.livekit_url, token)
+
+    try:
+        # Already-present participants do not fire connection events.
+        for participant in room.remote_participants.values():
+            capture(participant)
+        try:
+            await asyncio.wait_for(declared.wait(), timeout=60)
+        except TimeoutError:
+            for participant in room.remote_participants.values():
+                capture(participant)
+    finally:
+        await room.disconnect()
+
+    assert declared.is_set(), "the avatar never declared its stream synthetic"
+    assert seen["attributes"][ATTR_SOURCE_TYPE] == DIGITAL_SOURCE_TYPE
+
+    manifest = json.loads(seen["metadata"])
+    labels = {a["label"] for a in manifest["assertions"]}
+    assert {"c2pa.actions", "avatar.consent", "avatar.models"} <= labels
+
+    consent = next(
+        a["data"] for a in manifest["assertions"] if a["label"] == "avatar.consent"
+    )
+    assert consent["consent_record_id"] not in ("", "unknown"), (
+        "the declaration must name the consent record the session ran under"
+    )
