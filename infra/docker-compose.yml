@@ -1,0 +1,38 @@
+# Local infrastructure. Everything here is a container, so nothing is installed
+# on the host. The same three services exist in cloud; only their configuration
+# and placement differ.
+services:
+  # WebRTC SFU. --dev mode issues the well-known devkey/secret pair and skips
+  # TLS, which is correct for localhost and must never be used in cloud.
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --dev --bind 0.0.0.0
+    ports:
+      - "7880:7880"       # signalling (WebSocket) and HTTP API
+      - "7881:7881"       # WebRTC over TCP, the fallback path
+      - "7882:7882/udp"   # WebRTC over UDP, the normal path
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: avatar
+      POSTGRES_PASSWORD: avatar
+      POSTGRES_DB: avatar
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avatar"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

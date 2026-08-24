@@ -1,0 +1,63 @@
+"""Process configuration.
+
+One Settings object, populated from the environment and an optional .env file.
+No other module in this package reads os.environ directly - that rule is what
+keeps the difference between a laptop and a GPU server to a set of values
+rather than a set of branches.
+"""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Transport. The docker-compose dev server issues this key/secret pair.
+    livekit_url: str = "ws://localhost:7880"
+    livekit_api_key: str = "devkey"
+    livekit_api_secret: str = "secret"
+
+    # Language model, reached through an OpenAI-compatible endpoint. Ollama
+    # serves one at /v1, so the same client works against a local model or a
+    # hosted provider with no code change.
+    llm_base_url: str = "http://localhost:11434/v1"
+    llm_model: str = "llama3.2:3b"
+    llm_api_key: str = "ollama"  # ignored by Ollama; required by the client
+
+    # Vision model. Ollama's native endpoint, not the OpenAI shim, because the
+    # shim's image handling varies by version.
+    vlm_base_url: str = "http://localhost:11434"
+    vlm_model: str = "qwen2.5vl:3b"
+
+    # Backend selection. See the execution matrix in the design document.
+    #   stt_backend:      "mlx" (Metal, Apple Silicon) | "faster" (CTranslate2)
+    #   renderer_backend: "viseme" (CPU) | "musetalk" (CUDA, sub-project 2)
+    stt_backend: str = "mlx"
+    stt_model: str = "mlx-community/whisper-base-mlx"
+    renderer_backend: str = "viseme"
+
+    # Vision sampling. Both conditions must hold before a frame is sent: at
+    # least vision_interval_s since the last upload, and enough visual change
+    # since the last uploaded frame. The interval bounds cost; the threshold
+    # suppresses redundant spend below that ceiling.
+    vision_interval_s: float = 4.0
+    vision_motion_threshold: float = 6.0
+    vision_timeout_s: float = 8.0
+
+    # Rendered video track geometry.
+    video_width: int = 512
+    video_height: int = 512
+    video_fps: int = 25
+
+    database_url: str = "sqlite+aiosqlite:///./avatar.db"
+    redis_url: str = "redis://localhost:6379/0"
+
+    assets_dir: str = "assets"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Cached singleton. Tests construct Settings directly to bypass the cache."""
+    return Settings()

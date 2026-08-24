@@ -15,3 +15,21 @@ web/crisis-log.jsonl
 # OS noise
 Thumbs.db
 .DS_Store
+
+# Toolchain binaries fetched into the project rather than installed system-wide
+.tools/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.db
+
+# Local environment
+.env
+.env.local
+
+# Generated avatar assets (source material and derived plates)
+assets/
