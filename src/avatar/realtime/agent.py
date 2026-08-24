@@ -38,6 +38,7 @@ from pipecat.transports.livekit.transport import LiveKitParams, LiveKitTransport
 from avatar.config import Settings, get_settings
 from avatar.persona import build_system_prompt, load_profile
 from avatar.realtime.video_publisher import LiveKitVideoPublisher
+from avatar.realtime.warmup import warm
 from avatar.renderer.base import RendererStage
 from avatar.renderer.plates import AvatarAssets, synthetic_assets
 from avatar.renderer.processor import RendererProcessor
@@ -81,7 +82,7 @@ def build_pipeline(
     transport: LiveKitTransport,
     profile: dict,
     stage: RendererStage,
-) -> tuple[Pipeline, PipelineTask, SceneState]:
+) -> tuple[Pipeline, PipelineTask, SceneState, dict]:
     """Assemble the conversation graph."""
     scene = SceneState()
 
@@ -147,7 +148,9 @@ def build_pipeline(
             enable_usage_metrics=True,
         ),
     )
-    return pipeline, task, scene
+    # Returned so the caller can warm them before the pipeline starts.
+    services = {"stt": stt, "tts": tts, "llm": llm}
+    return pipeline, task, scene, services
 
 
 async def run_agent(room: str, token: str, profile_path: str, assets_path: str | None) -> None:
@@ -173,7 +176,7 @@ async def run_agent(room: str, token: str, profile_path: str, assets_path: str |
         ),
     )
 
-    _, task, _ = build_pipeline(cfg, transport, profile, stage)
+    _, task, _, services = build_pipeline(cfg, transport, profile, stage)
 
     @transport.event_handler("on_first_participant_joined")
     async def _on_join(transport, participant):
@@ -183,6 +186,10 @@ async def run_agent(room: str, token: str, profile_path: str, assets_path: str |
     async def _on_leave(transport, participant, reason=None):
         logger.info(f"participant left ({reason}); ending session")
         await task.cancel()
+
+    # Load every model before the person speaks. They are still looking at a
+    # connecting screen, so this time is free; inside the first turn it is not.
+    await warm(cfg, stt=services["stt"], tts=services["tts"])
 
     logger.info(f"agent joining room {room}")
     runner = WorkerRunner(handle_sigint=False)
