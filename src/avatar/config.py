@@ -35,11 +35,16 @@ class Settings(BaseSettings):
     #   stt_backend:      "mlx" (Metal, Apple Silicon) | "faster" (CTranslate2)
     #   renderer_backend: "viseme" (CPU) | "musetalk" (CUDA, sub-project 2)
     stt_backend: str = "mlx"
-    # Quantised large-v3-turbo: roughly the accuracy of large-v3 at a fraction
-    # of the memory, and fast enough on Apple silicon for a live turn. The
-    # base model mis-hears short Spanish utterances badly enough to derail the
-    # conversation before the model ever sees them.
-    stt_model: str = "mlx-community/whisper-large-v3-turbo"
+    # Measured on an M3 Max, end of speech to first avatar audio:
+    #   whisper-base-mlx           fastest, but mis-hears short Spanish
+    #                              ("Hola" -> "Bola") and derails the reply
+    #   whisper-small-mlx          1.9s total, 1.4s in STT, accurate
+    #   distil-whisper-large-v3    2.5s total, 1.7s in STT
+    #   whisper-large-v3-turbo     2.9s total, 2.1s in STT
+    # Small is the local default: it is the smallest model that transcribes
+    # short Spanish utterances correctly. Cloud uses large-v3 on a GPU, where
+    # the accuracy is free.
+    stt_model: str = "mlx-community/whisper-small-mlx"
     # Language hint for STT. Empty means autodetect, which is unreliable on
     # single short utterances.
     stt_language: str = "es"

@@ -23,9 +23,12 @@ from avatar.vision.state import SceneState
 class VisionSampler(FrameProcessor):
     """Selects frames worth describing and describes them in the background."""
 
-    def __init__(self, scene: SceneState, cfg: Settings, on_observation=None):
+    def __init__(
+        self, scene: SceneState, cfg: Settings, on_observation=None, locale: str = "en"
+    ):
         super().__init__()
         self._scene = scene
+        self._locale = locale
         self._cfg = cfg
         self._gate = MotionGate(cfg.vision_interval_s, cfg.vision_motion_threshold)
         self._on_observation = on_observation
@@ -59,7 +62,11 @@ class VisionSampler(FrameProcessor):
 
     async def _describe(self, jpeg: bytes) -> None:
         text = await describe_frame(
-            jpeg, self._cfg.vlm_model, self._cfg.vlm_base_url, self._cfg.vision_timeout_s
+            jpeg,
+            self._cfg.vlm_model,
+            self._cfg.vlm_base_url,
+            self._cfg.vision_timeout_s,
+            locale=self._locale,
         )
         if not text:
             return  # failure leaves the previous observation standing

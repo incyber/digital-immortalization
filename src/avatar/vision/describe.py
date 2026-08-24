@@ -16,11 +16,22 @@ from loguru import logger
 
 # Kept tight on purpose. A long description crowds the persona out of the
 # system prompt and invites the model to narrate the room instead of talking.
-PROMPT = (
-    "Describe what you see in one short sentence: the person's clothing, "
-    "posture, any gesture they are making, and the setting. "
-    "No preamble, no speculation about who they are."
-)
+_PROMPTS = {
+    "en": (
+        "Describe what you see in one short sentence: the person's clothing, "
+        "posture, any gesture they are making, and the setting. "
+        "No preamble, no speculation about who they are."
+    ),
+    "es": (
+        "Describe lo que ves en una sola frase corta: la ropa de la persona, "
+        "su postura, cualquier gesto que haga, y el entorno. "
+        "Sin preambulo y sin especular sobre quien es."
+    ),
+}
+
+
+def prompt_for(locale: str) -> str:
+    return _PROMPTS.get(locale, _PROMPTS["en"])
 
 # Frames are sent at this long-edge size. Larger costs tokens and time for
 # detail that does not change the sentence.
@@ -45,7 +56,7 @@ def encode_frame(frame_rgb: np.ndarray) -> bytes:
 
 
 async def describe_frame(
-    jpeg: bytes, model: str, base_url: str, timeout_s: float = 8.0
+    jpeg: bytes, model: str, base_url: str, timeout_s: float = 8.0, locale: str = "en"
 ) -> str:
     """One sentence describing the frame, or "" on any failure.
 
@@ -62,7 +73,7 @@ async def describe_frame(
         "messages": [
             {
                 "role": "user",
-                "content": PROMPT,
+                "content": prompt_for(locale),
                 "images": [base64.b64encode(jpeg).decode("ascii")],
             }
         ],

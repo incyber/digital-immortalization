@@ -118,7 +118,9 @@ def build_pipeline(
     pipeline = Pipeline(
         [
             transport.input(),
-            VisionSampler(scene, cfg, on_observation=refresh_system_prompt),
+            VisionSampler(
+                scene, cfg, on_observation=refresh_system_prompt, locale=profile["locale"]
+            ),
             stt,
             CrisisProcessor(profile),
             aggregators.user(),

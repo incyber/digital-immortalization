@@ -20,6 +20,11 @@ MAX_DESCRIPTION_CHARS = 200
 # worse than describing nothing.
 STALE_AFTER_S = 60.0
 
+_OBSERVATION = {
+    "en": "Through the camera you can currently see: {description}",
+    "es": "Por la camara ves ahora mismo: {description}",
+}
+
 
 @dataclass
 class SceneState:
@@ -41,13 +46,17 @@ class SceneState:
         current = time.monotonic() if now is None else now
         return not self.description or (current - self.updated_at) > STALE_AFTER_S
 
-    def as_prompt_fragment(self, now: float | None = None) -> str:
+    def as_prompt_fragment(self, locale: str = "en", now: float | None = None) -> str:
         """One line for the system prompt, or nothing at all.
 
         Framed as a camera observation rather than as fact, because the vision
         model is frequently confident and wrong, and the persona should be able
         to be corrected without contradicting its own instructions.
+
+        Localised because a small model reading one English line in an
+        otherwise Spanish prompt starts answering in English.
         """
         if self.is_stale(now):
             return ""
-        return f"Through the camera you can currently see: {self.description}"
+        template = _OBSERVATION.get(locale, _OBSERVATION["en"])
+        return template.format(description=self.description)

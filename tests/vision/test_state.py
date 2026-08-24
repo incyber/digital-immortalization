@@ -30,3 +30,12 @@ def test_stale_observation_is_dropped_rather_than_asserted():
     s = SceneState()
     s.update("a man in a red coat", now=0.0)
     assert s.as_prompt_fragment(now=STALE_AFTER_S + 1) == ""
+
+
+def test_observation_is_localised():
+    # A single English line inside a Spanish prompt makes a small model switch
+    # languages mid-conversation.
+    s = SceneState()
+    s.update("un hombre con camisa azul", now=0.0)
+    assert "Por la camara" in s.as_prompt_fragment(locale="es", now=1.0)
+    assert "Through the camera" in s.as_prompt_fragment(locale="en", now=1.0)

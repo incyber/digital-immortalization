@@ -72,7 +72,11 @@ def build_system_prompt(
         profile["voice"],
     ]
 
-    observation = scene.as_prompt_fragment(now=now) if scene is not None else ""
+    observation = (
+        scene.as_prompt_fragment(locale=profile["locale"], now=now)
+        if scene is not None
+        else ""
+    )
     if observation:
         parts.append(observation)
 

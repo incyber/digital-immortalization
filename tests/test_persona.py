@@ -37,13 +37,17 @@ def test_prompt_has_no_unfilled_placeholders():
 def test_empty_scene_adds_no_observation():
     prompt = build_system_prompt(load_profile(PROFILE_PATH), SceneState(), now=0.0)
     assert "camera" not in prompt.lower()
+    assert "camara" not in prompt.lower()
 
 
 def test_populated_scene_adds_exactly_one_observation():
+    # The shipped profile is Spanish, so the observation is too. Asserting on
+    # the English wording here would pass only by accident.
     scene = SceneState()
-    scene.update("a man in a blue shirt, waving", now=0.0)
+    scene.update("un hombre con camisa azul, saludando", now=0.0)
     prompt = build_system_prompt(load_profile(PROFILE_PATH), scene, now=1.0)
-    assert prompt.lower().count("through the camera") == 1
+    assert prompt.lower().count("por la camara") == 1
+    assert "camisa azul" in prompt
 
 
 def test_boundaries_come_after_history():

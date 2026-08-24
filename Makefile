@@ -2,7 +2,7 @@
 # binary checked into .tools/ rather than installed on the host.
 UV := .tools/uv
 
-.PHONY: install infra-up infra-down test lint agent gateway web dev clean
+.PHONY: install infra-up infra-down test test-e2e latency seed lint agent gateway web clean
 
 install:                ## Resolve dependencies and install the package editable
 	$(UV) sync --extra dev
@@ -15,8 +15,17 @@ infra-up:               ## Start LiveKit, Postgres and Redis
 infra-down:
 	docker compose -f infra/docker-compose.yml down
 
-test:
+test:                   ## Unit and integration tests; no infrastructure needed
 	$(UV) run pytest -q
+
+test-e2e:               ## Real LiveKit and Ollama; requires make infra-up
+	AGENT_LOG=$${AGENT_LOG:-/tmp/avatar-agent.log} E2E=1 $(UV) run pytest tests/e2e -q
+
+latency:                ## Measure end of speech to first avatar audio
+	E2E=1 $(UV) run pytest tests/e2e/test_latency.py -q -s
+
+seed:                   ## Demo avatar with a verified consent record
+	$(UV) run python scripts/seed.py
 
 lint:
 	$(UV) run ruff check src tests
