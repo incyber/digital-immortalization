@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # suppresses redundant spend below that ceiling.
     vision_interval_s: float = 4.0
     vision_motion_threshold: float = 6.0
-    vision_timeout_s: float = 8.0
+    vision_timeout_s: float = 20.0  # measured ~8s for qwen2.5vl:3b; off the turn path
 
     # Rendered video track geometry.
     video_width: int = 512
