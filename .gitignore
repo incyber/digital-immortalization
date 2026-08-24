@@ -1,0 +1,17 @@
+# Vercel local project link / secrets
+vercel-app/.vercel
+vercel-app/.env*
+
+# Claude Code local-only settings
+.claude/settings.local.json
+
+# Local runtime artifacts from the CLI prototypes (never committed - contain
+# real conversation content if the scripts are actually run)
+mvp/memory.jsonl
+mvp/crisis-log.jsonl
+web/memory.jsonl
+web/crisis-log.jsonl
+
+# OS noise
+Thumbs.db
+.DS_Store

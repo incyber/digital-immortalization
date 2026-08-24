@@ -1,0 +1,7 @@
+{
+  "name": "di-colon",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DI web prototype (Cristobal Colon persona) - static frontend + one Vercel Edge Function that proxies to Gemini so the API key never reaches the browser."
+}
