@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     stt_model: str = "mlx-community/whisper-base-mlx"
     renderer_backend: str = "viseme"
 
+    # Piper voice. Downloaded once into voices_dir and cached there; the name
+    # is a locale-qualified voice id from the rhasspy/piper-voices set.
+    tts_voice: str = "es_ES-davefx-medium"
+    voices_dir: str = "assets/voices"
+
     # Vision sampling. Both conditions must hold before a frame is sent: at
     # least vision_interval_s since the last upload, and enough visual change
     # since the last uploaded frame. The interval bounds cost; the threshold

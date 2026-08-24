@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Live avatar call platform"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "pipecat-ai[livekit,silero,whisper,openai]>=1.7.0",
+    "pipecat-ai[livekit,mlx-whisper,openai,silero,whisper]>=1.7.0",
     "livekit-api>=1.2.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
@@ -19,6 +19,7 @@ dependencies = [
     "httpx>=0.28",
     "pyjwt>=2.10",
     "argon2-cffi>=23.1",
+    "piper-tts>=1.3",
 ]
 
 [project.optional-dependencies]
