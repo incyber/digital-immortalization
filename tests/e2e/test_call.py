@@ -1,0 +1,205 @@
+"""End-to-end over real infrastructure.
+
+A headless participant joins a room the gateway opened, subscribes to what the
+agent publishes, and asserts that a call actually exists: a video track that
+delivers frames of the declared size, and an audio track.
+
+Browser permissions are deliberately not involved. A screenshot proves a page
+rendered; this proves media flows.
+
+Skipped unless E2E=1 and LiveKit is reachable, so the default suite stays
+hermetic.
+"""
+
+import asyncio
+import os
+
+import httpx
+import numpy as np
+import pytest
+from livekit import rtc
+
+from avatar.config import Settings
+from avatar.gateway.sessions import mint_token
+
+GATEWAY = os.environ.get("GATEWAY_URL", "http://localhost:8000")
+JOIN_TIMEOUT_S = 45
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("E2E") != "1", reason="set E2E=1 and start infra to run"
+)
+
+
+@pytest.fixture
+def cfg():
+    return Settings(_env_file=None)
+
+
+async def _open_session(avatar_id: str = "colon") -> dict:
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            f"{GATEWAY}/api/sessions", json={"avatar_id": avatar_id}
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def test_agent_publishes_a_live_call(cfg):
+    """The whole point of sub-project 1, asserted in one test."""
+    session = await _open_session()
+
+    room = rtc.Room()
+    video_frames: list[rtc.VideoFrame] = []
+    audio_seen = asyncio.Event()
+    got_video = asyncio.Event()
+    drains: set[asyncio.Task] = set()
+
+    @room.on("track_subscribed")
+    def _on_track(track, publication, participant):
+        if track.kind == rtc.TrackKind.KIND_VIDEO:
+            async def drain():
+                async for event in rtc.VideoStream(track):
+                    video_frames.append(event.frame)
+                    got_video.set()
+                    if len(video_frames) >= 10:
+                        return
+
+            task = asyncio.create_task(drain())
+            drains.add(task)
+            task.add_done_callback(drains.discard)
+        elif track.kind == rtc.TrackKind.KIND_AUDIO:
+            audio_seen.set()
+
+    # A second identity in the same room, standing in for the browser.
+    token = mint_token(cfg, session["room"], identity="probe", name="Probe")
+    await room.connect(cfg.livekit_url, token)
+
+    try:
+        await asyncio.wait_for(got_video.wait(), timeout=JOIN_TIMEOUT_S)
+        await asyncio.wait_for(audio_seen.wait(), timeout=JOIN_TIMEOUT_S)
+        # Let a few more frames land so cadence, not just presence, is checked.
+        await asyncio.sleep(1.5)
+    finally:
+        await room.disconnect()
+
+    assert video_frames, "the agent published no video frames"
+    assert audio_seen.is_set(), "the agent published no audio track"
+
+    first = video_frames[0]
+    assert (first.width, first.height) == (cfg.video_width, cfg.video_height)
+
+    # Idle frames are paced to the declared rate. Well under one second of
+    # frames in one and a half seconds means the loop has stalled.
+    assert len(video_frames) >= 5, f"only {len(video_frames)} frames in ~1.5s"
+
+
+async def test_consent_gate_refuses_over_http():
+    """The gate, exercised through the real HTTP surface rather than in-process."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            f"{GATEWAY}/api/sessions", json={"avatar_id": "no-such-avatar"}
+        )
+    assert response.status_code == 403
+    assert "consent" in response.text.lower() or "no avatar" in response.text.lower()
+
+
+async def test_speaking_to_the_avatar_produces_a_spoken_reply(cfg):
+    """The conversational loop, end to end.
+
+    Publishes real synthesised speech into the room and waits for the agent to
+    answer. This is the assertion that distinguishes a working call from a
+    video of a face: STT, the guardrail, the model and TTS all have to run.
+    """
+    from piper import PiperVoice
+
+    session = await _open_session()
+
+    voice = PiperVoice.load(f"{cfg.voices_dir}/{cfg.tts_voice}.onnx")
+    chunks = list(voice.synthesize("Hola. Dime quién eres, en pocas palabras."))
+    pcm = b"".join(c.audio_int16_bytes for c in chunks)
+    sample_rate = voice.config.sample_rate
+
+    room = rtc.Room()
+    reply_audio = asyncio.Event()
+    agent_audio_frames = 0
+    total_audio_frames = 0
+    peak = 0
+    # Held so the loop keeps a strong reference; a bare create_task can be
+    # collected before it reads its first frame.
+    drains: set[asyncio.Task] = set()
+
+    @room.on("track_subscribed")
+    def _on_track(track, publication, participant):
+        nonlocal agent_audio_frames
+        if track.kind != rtc.TrackKind.KIND_AUDIO:
+            return
+
+        async def drain():
+            nonlocal agent_audio_frames, total_audio_frames, peak
+            async for event in rtc.AudioStream(track):
+                total_audio_frames += 1
+                # Silence is published continuously; only non-silent audio
+                # counts as the avatar actually saying something. Absolute
+                # value matters: a waveform whose loud half happens to be
+                # negative would otherwise read as silence.
+                # np.frombuffer rather than memoryview.cast: the frame's
+                # buffer is not guaranteed to be byte-typed, and cast() on a
+                # non-byte memoryview raises inside this task, where the
+                # exception is swallowed and the drain silently stops.
+                samples = np.frombuffer(event.frame.data, dtype=np.int16)
+                level = int(np.abs(samples).max()) if samples.size else 0
+                peak = max(peak, level)
+                if level > 500:
+                    agent_audio_frames += 1
+                    if agent_audio_frames > 20:
+                        reply_audio.set()
+                        return
+
+        task = asyncio.create_task(drain())
+        drains.add(task)
+        task.add_done_callback(drains.discard)
+
+    token = mint_token(cfg, session["room"], identity="speaker", name="Speaker")
+    await room.connect(cfg.livekit_url, token)
+
+    source = rtc.AudioSource(sample_rate, 1)
+    track = rtc.LocalAudioTrack.create_audio_track("speech", source)
+    await room.local_participant.publish_track(
+        track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+    )
+
+    try:
+        # Wait for the agent to be listening before speaking into the room.
+        await asyncio.sleep(3)
+
+        samples_per_chunk = sample_rate // 100  # 10 ms
+        bytes_per_chunk = samples_per_chunk * 2
+        for offset in range(0, len(pcm), bytes_per_chunk):
+            block = pcm[offset : offset + bytes_per_chunk]
+            if len(block) < bytes_per_chunk:
+                block = block + bytes(bytes_per_chunk - len(block))
+            await source.capture_frame(
+                rtc.AudioFrame(block, sample_rate, 1, samples_per_chunk)
+            )
+            await asyncio.sleep(0.01)
+
+        # Trailing silence so the voice activity detector sees the turn end.
+        for _ in range(80):
+            await source.capture_frame(
+                rtc.AudioFrame(bytes(bytes_per_chunk), sample_rate, 1, samples_per_chunk)
+            )
+            await asyncio.sleep(0.01)
+
+        # Swallowed so the assertion below can report what was actually seen;
+        # a bare wait_for would raise TimeoutError with no diagnostic.
+        try:
+            await asyncio.wait_for(reply_audio.wait(), timeout=90)
+        except asyncio.TimeoutError:
+            pass
+    finally:
+        await room.disconnect()
+
+    assert reply_audio.is_set(), (
+        f"the avatar did not speak back (saw {agent_audio_frames} non-silent frames, "
+        f"{total_audio_frames} audio frames total)"
+    )

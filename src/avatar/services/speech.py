@@ -20,21 +20,35 @@ from pipecat.services.tts_service import TTSService
 from avatar.config import Settings
 
 
+def _language(code: str):
+    """Map a locale code to Pipecat's Language enum, or None to autodetect."""
+    if not code:
+        return None
+    from pipecat.transcriptions.language import Language
+
+    try:
+        return Language(code)
+    except ValueError as exc:
+        raise ValueError(f"unknown stt_language {code!r}") from exc
+
+
 def build_stt(cfg: Settings) -> STTService:
     """Speech to text.
 
     mlx  - Whisper through MLX, which runs on the Metal GPU. The local default.
     faster - CTranslate2 Whisper. CPU or CUDA. The cloud default.
     """
+    language = _language(cfg.stt_language)
+
     if cfg.stt_backend == "mlx":
         from pipecat.services.whisper.stt import WhisperSTTServiceMLX
 
-        return WhisperSTTServiceMLX(model=cfg.stt_model)
+        return WhisperSTTServiceMLX(model=cfg.stt_model, language=language)
 
     if cfg.stt_backend == "faster":
         from pipecat.services.whisper.stt import WhisperSTTService
 
-        return WhisperSTTService(model=cfg.stt_model)
+        return WhisperSTTService(model=cfg.stt_model, language=language)
 
     raise ValueError(f"unknown stt_backend {cfg.stt_backend!r}; expected 'mlx' or 'faster'")
 

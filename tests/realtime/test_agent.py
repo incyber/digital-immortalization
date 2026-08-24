@@ -85,3 +85,18 @@ def test_pipecat_livekit_transport_still_lacks_video_output():
     assert "return False" in source, (
         "Pipecat's LiveKit transport now writes video; drop LiveKitVideoPublisher"
     )
+
+
+def test_vad_is_attached_to_the_aggregator_not_the_transport():
+    # LiveKitParams has no vad_analyzer field and pydantic ignores unknown
+    # keys, so passing it there is silently accepted and the agent then hears
+    # nothing at all. Assert the field really is absent, so this cannot be
+    # "fixed" back to the transport without the test failing.
+    from pipecat.transports.livekit.transport import LiveKitParams
+
+    assert "vad_analyzer" not in LiveKitParams.model_fields
+
+    from pathlib import Path
+
+    src = Path("src/avatar/realtime/agent.py").read_text()
+    assert "LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer())" in src

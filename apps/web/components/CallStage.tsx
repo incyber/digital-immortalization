@@ -59,10 +59,12 @@ export function CallStage({
   onLeave: () => void;
 }) {
   const [muted, setMuted] = useState(false);
-  // Undefined until we know. A machine with no webcam, or a visitor who
+  // Undefined until probed. A machine with no webcam, or a visitor who
   // declines it, must still get a call: the camera feeds the vision channel,
   // which is an enrichment, while the microphone is the conversation itself.
   const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(null);
+  const [micAvailable, setMicAvailable] = useState<boolean | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
     document.body.style.overflow = "hidden";
@@ -71,29 +73,76 @@ export function CallStage({
     };
   }, []);
 
-  // Probe before connecting. LiveKitRoom treats a failed track request as a
-  // connection failure and disconnects, so asking for a camera that is not
-  // there would end the call rather than degrade it.
+  // Probe each device before connecting. LiveKitRoom treats a failed track
+  // request as a connection failure and disconnects the whole room, so asking
+  // for hardware that is absent would end the call instead of degrading it.
   useEffect(() => {
     let cancelled = false;
-    navigator.mediaDevices
-      ?.getUserMedia({ video: true })
-      .then((stream) => {
+
+    async function probe(constraints: MediaStreamConstraints) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
         stream.getTracks().forEach((t) => t.stop());
-        if (!cancelled) setCameraAvailable(true);
-      })
-      .catch(() => {
-        if (!cancelled) setCameraAvailable(false);
-      });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    (async () => {
+      const [video, audio] = await Promise.all([
+        probe({ video: true }),
+        probe({ audio: true }),
+      ]);
+      if (cancelled) return;
+      setCameraAvailable(video);
+      setMicAvailable(audio);
+    })();
+
     return () => {
       cancelled = true;
     };
   }, []);
 
-  if (cameraAvailable === null) {
+  if (cameraAvailable === null || micAvailable === null) {
     return (
       <div className="flex h-full w-full items-center justify-center text-neutral-500">
         Checking your camera and microphone…
+      </div>
+    );
+  }
+
+  // Without a microphone there is no conversation, only a video of someone
+  // waiting. Say so rather than connecting to a call that cannot work.
+  if (!micAvailable) {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-6 text-center">
+        <p className="text-neutral-300">A microphone is required for a call.</p>
+        <p className="max-w-sm text-sm text-neutral-500">
+          Allow microphone access for this site, then try again. The camera is
+          optional — the avatar can talk without seeing you.
+        </p>
+        <button
+          onClick={onLeave}
+          className="rounded-full bg-white/10 px-6 py-2.5 text-sm text-white hover:bg-white/20"
+        >
+          Back
+        </button>
+      </div>
+    );
+  }
+
+  if (failure) {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-6 text-center">
+        <p className="text-neutral-300">The call ended unexpectedly.</p>
+        <p className="max-w-sm text-sm text-neutral-500">{failure}</p>
+        <button
+          onClick={onLeave}
+          className="rounded-full bg-white/10 px-6 py-2.5 text-sm text-white hover:bg-white/20"
+        >
+          Back
+        </button>
       </div>
     );
   }
@@ -106,6 +155,7 @@ export function CallStage({
       audio={!muted}
       video={cameraAvailable}
       onDisconnected={onLeave}
+      onError={(e) => setFailure(e.message)}
       className="relative h-full w-full bg-neutral-950"
     >
       <div className="relative h-full w-full">

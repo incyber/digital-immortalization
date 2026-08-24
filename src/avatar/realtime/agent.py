@@ -28,7 +28,10 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import WorkerRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.livekit.transport import LiveKitParams, LiveKitTransport
 
@@ -91,7 +94,14 @@ def build_pipeline(
     context = LLMContext(
         messages=[{"role": "system", "content": build_system_prompt(profile, scene)}]
     )
-    aggregators = LLMContextAggregatorPair(context)
+    # Voice activity detection lives on the user aggregator in Pipecat 1.7,
+    # not on transport params. LiveKitParams has no vad_analyzer field and
+    # silently ignores one, which produces a call that hears nothing: audio
+    # arrives, no turn is ever detected, and no transcription happens.
+    aggregators = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+    )
 
     async def refresh_system_prompt(_text: str) -> None:
         """Rewrite the system message when the camera observation changes.
@@ -157,7 +167,6 @@ async def run_agent(room: str, token: str, profile_path: str, assets_path: str |
             video_out_height=cfg.video_height,
             video_out_framerate=cfg.video_fps,
             video_out_color_format="RGB",
-            vad_analyzer=SileroVADAnalyzer(),
         ),
     )
 

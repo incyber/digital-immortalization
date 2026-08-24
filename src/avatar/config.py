@@ -35,7 +35,14 @@ class Settings(BaseSettings):
     #   stt_backend:      "mlx" (Metal, Apple Silicon) | "faster" (CTranslate2)
     #   renderer_backend: "viseme" (CPU) | "musetalk" (CUDA, sub-project 2)
     stt_backend: str = "mlx"
-    stt_model: str = "mlx-community/whisper-base-mlx"
+    # Quantised large-v3-turbo: roughly the accuracy of large-v3 at a fraction
+    # of the memory, and fast enough on Apple silicon for a live turn. The
+    # base model mis-hears short Spanish utterances badly enough to derail the
+    # conversation before the model ever sees them.
+    stt_model: str = "mlx-community/whisper-large-v3-turbo"
+    # Language hint for STT. Empty means autodetect, which is unreliable on
+    # single short utterances.
+    stt_language: str = "es"
     renderer_backend: str = "viseme"
 
     # Piper voice. Downloaded once into voices_dir and cached there; the name
