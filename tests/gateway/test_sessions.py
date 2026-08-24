@@ -1,0 +1,54 @@
+import pytest
+
+from avatar.gateway.consent import ConsentError
+from avatar.gateway.sessions import mint_token, open_session
+
+
+async def test_open_session_refuses_without_consent(db, cfg, avatar):
+    with pytest.raises(ConsentError):
+        await open_session(db, cfg, avatar.id)
+
+
+async def test_open_session_writes_nothing_when_refused(db, cfg, avatar):
+    from sqlalchemy import func, select
+
+    from avatar.gateway.models import Session
+
+    with pytest.raises(ConsentError):
+        await open_session(db, cfg, avatar.id)
+    count = (await db.execute(select(func.count()).select_from(Session))).scalar_one()
+    assert count == 0, "a refused request must leave no session row behind"
+
+
+async def test_open_session_returns_joinable_details(db, cfg, verified_avatar):
+    out = await open_session(db, cfg, verified_avatar.id)
+    assert out["url"].startswith("ws")
+    assert out["room"].startswith("call-")
+    assert len(out["token"].split(".")) == 3
+
+
+async def test_token_is_scoped_to_one_room(cfg):
+    import jwt
+
+    token = mint_token(cfg, room="call-abc", identity="human-1", name="Visitor")
+    claims = jwt.decode(token, cfg.livekit_api_secret, algorithms=["HS256"])
+    assert claims["video"]["room"] == "call-abc"
+    assert claims["video"]["roomJoin"] is True
+
+
+async def test_each_session_gets_a_distinct_room(db, cfg, verified_avatar):
+    a = await open_session(db, cfg, verified_avatar.id)
+    b = await open_session(db, cfg, verified_avatar.id)
+    assert a["room"] != b["room"]
+
+
+async def test_dev_secret_is_rejected_outside_development(cfg):
+    # The LiveKit dev server ships a 6-byte secret. It is fine on localhost and
+    # a real weakness anywhere else, so shipping it to cloud must be a failure
+    # rather than a warning nobody reads.
+    from avatar.gateway.sessions import assert_production_ready
+
+    import pytest
+
+    with pytest.raises(ValueError, match="development secret"):
+        assert_production_ready(cfg)
