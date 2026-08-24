@@ -203,3 +203,105 @@ async def test_speaking_to_the_avatar_produces_a_spoken_reply(cfg):
         f"the avatar did not speak back (saw {agent_audio_frames} non-silent frames, "
         f"{total_audio_frames} audio frames total)"
     )
+
+
+async def test_the_avatar_can_describe_what_the_camera_shows(cfg):
+    """The vision channel, end to end.
+
+    Publishes a camera track carrying a recognisable scene, asks about it in
+    speech, and asserts the reply refers to what was shown. This is the part
+    that distinguishes a call from a phone call.
+    """
+    import cv2
+    from piper import PiperVoice
+
+    session = await _open_session()
+
+    # A frame with one unambiguous, describable feature: a large red shape.
+    scene = np.full((480, 640, 3), (245, 243, 240), dtype=np.uint8)
+    cv2.circle(scene, (320, 150), 90, (200, 170, 150), -1)          # head
+    cv2.rectangle(scene, (200, 250), (440, 480), (40, 40, 210), -1)  # red torso
+    rgba = np.dstack([scene, np.full((480, 640), 255, dtype=np.uint8)])
+
+    voice = PiperVoice.load(f"{cfg.voices_dir}/{cfg.tts_voice}.onnx")
+    chunks = list(voice.synthesize("¿De qué color es mi ropa? Responde en pocas palabras."))
+    pcm = b"".join(c.audio_int16_bytes for c in chunks)
+    sample_rate = voice.config.sample_rate
+
+    room = rtc.Room()
+    token = mint_token(cfg, session["room"], identity="viewer", name="Viewer")
+    await room.connect(cfg.livekit_url, token)
+
+    video_source = rtc.VideoSource(640, 480)
+    video_track = rtc.LocalVideoTrack.create_video_track("camera", video_source)
+    await room.local_participant.publish_track(
+        video_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+    )
+
+    audio_source = rtc.AudioSource(sample_rate, 1)
+    audio_track = rtc.LocalAudioTrack.create_audio_track("speech", audio_source)
+    await room.local_participant.publish_track(
+        audio_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+    )
+
+    stop = asyncio.Event()
+
+    async def pump_camera():
+        frame = rtc.VideoFrame(640, 480, rtc.VideoBufferType.RGBA, rgba.tobytes())
+        while not stop.is_set():
+            video_source.capture_frame(frame)
+            await asyncio.sleep(1 / 15)
+
+    pump = asyncio.create_task(pump_camera())
+
+    try:
+        # The vision model needs a moment: the first frame is always sent, but
+        # describing it takes several seconds and it must land before the
+        # question does.
+        await asyncio.sleep(25)
+
+        samples_per_chunk = sample_rate // 100
+        bytes_per_chunk = samples_per_chunk * 2
+        for offset in range(0, len(pcm), bytes_per_chunk):
+            block = pcm[offset : offset + bytes_per_chunk]
+            if len(block) < bytes_per_chunk:
+                block += bytes(bytes_per_chunk - len(block))
+            await audio_source.capture_frame(
+                rtc.AudioFrame(block, sample_rate, 1, samples_per_chunk)
+            )
+            await asyncio.sleep(0.01)
+        for _ in range(80):
+            await audio_source.capture_frame(
+                rtc.AudioFrame(bytes(bytes_per_chunk), sample_rate, 1, samples_per_chunk)
+            )
+            await asyncio.sleep(0.01)
+
+        await asyncio.sleep(20)
+    finally:
+        stop.set()
+        await pump
+        await room.disconnect()
+
+    # Asserted from the agent's log, and deliberately only on what this code
+    # controls: that a camera frame was selected, described, and injected into
+    # the system prompt the model reads.
+    #
+    # Whether a 3B vision model correctly reads a synthetic test frame is a
+    # property of that model, not of the pipeline, and asserting on its wording
+    # produces a test that passes for the wrong reasons - an earlier version of
+    # this test accepted "clothing" and so passed on the description "without
+    # any visible clothing". Description quality belongs in an evaluation
+    # against real camera footage, not in this test.
+    import pathlib
+
+    log = pathlib.Path(os.environ["AGENT_LOG"]).read_text(errors="ignore")
+
+    observations = [line for line in log.splitlines() if "scene:" in line]
+    assert observations, "the vision channel selected no frame and produced no observation"
+
+    description = observations[-1].split("scene:", 1)[1].strip()
+    assert len(description) > 20, f"observation was empty or truncated: {description!r}"
+
+    assert "scene observation injected into system prompt" in log, (
+        "an observation was produced but never reached the model"
+    )

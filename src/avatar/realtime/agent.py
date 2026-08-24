@@ -113,6 +113,7 @@ def build_pipeline(
         if messages and messages[0].get("role") == "system":
             messages[0]["content"] = build_system_prompt(profile, scene)
             context.set_messages(messages)
+            logger.info("scene observation injected into system prompt")
 
     pipeline = Pipeline(
         [
