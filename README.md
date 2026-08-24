@@ -17,15 +17,25 @@ server, where only the renderer changes.
 | Turn taking | Silero VAD, barge-in mid-reply |
 | Speech in | Whisper via MLX on Apple silicon, faster-whisper elsewhere |
 | Language | Any OpenAI-compatible endpoint; Ollama by default |
-| Speech out | Piper |
+| Speech out | Piper, out of process (it is GPL-3.0) |
 | Video out | Envelope-driven viseme renderer, CPU only |
 | Camera in | Motion-gated sampling into a vision model, off the turn path |
 | Safety | Keyword crisis guardrail ahead of the model |
 | Consent | Verified record required before any session opens |
 
-Measured on an M3 Max: **2.0 s** from end of speech to first audio back.
-The design budget is 1.5 s on cloud hardware. The gap is almost entirely
-speech-to-text — see `src/avatar/config.py` for the measurements.
+Measured on an M3 Max, end of speech to first audio back:
+
+| | |
+|---|---|
+| First turn of a call | ~800 ms |
+| Warm median | **~600 ms** |
+| Design budget (cloud hardware) | 1500 ms |
+
+An earlier version of this file reported 2.0 s and blamed speech-to-text. That
+was wrong: the latency test measured a single turn on a cold process, so it was
+timing model loading. Warm speech-to-text is 72 ms, not 1409 ms. Models are now
+warmed while the caller is still on the connecting screen, and the test runs
+four turns and asserts against the median of the warm ones.
 
 Not yet built, in order: the MuseTalk GPU renderer, voice cloning, retrieval
 memory, billing. See section 12 of the design.
@@ -87,6 +97,22 @@ src/avatar/
 apps/web/           Next.js client
 infra/              docker-compose
 ```
+
+## Licensing
+
+Two things here are easy to get wrong, and this project got both wrong at first:
+
+- **`piper-tts` is GPL-3.0-or-later**, not MIT. It runs as a separate service
+  rather than being imported, so this is aggregation rather than linking. Voice
+  files are licensed separately from the engine, and several carry no licence
+  field at all.
+- **MuseTalk's code is MIT but its distributed weights are CreativeML
+  OpenRAIL-M.** Commercially usable, but Section II requires the use
+  restrictions to be carried forward into customer terms as an enforceable
+  provision. That has not been done yet and must precede the first paying
+  customer.
+
+The full table, with what was verified and how, is in section 3 of the design.
 
 ## Two things worth knowing
 

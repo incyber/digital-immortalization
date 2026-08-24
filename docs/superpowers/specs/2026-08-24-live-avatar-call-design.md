@@ -48,13 +48,35 @@ Checked directly against source, not secondary claims.
 | LiveKit | Apache-2.0 | GitHub API |
 | faster-whisper | MIT | GitHub API |
 | Chatterbox | MIT | GitHub API |
-| MuseTalk | MIT (Tencent Music) | LICENSE file read directly |
+| MuseTalk — code | MIT (Tencent Music) | LICENSE file read directly |
+| MuseTalk — distributed weights | **CreativeML OpenRAIL-M** | HuggingFace API, `cardData.license` |
 | ditto-talkinghead | Apache-2.0 | GitHub API |
 | `PunithVT/ai-avatar-system` | MIT | GitHub API |
 
 MuseTalk's README section 539 states its code is MIT with "no limitation for
 both academic and commercial usage" and that its trained model is "available
 for any purpose, even commercially."
+
+**That reading was wrong, and this document asserted it.** The README describes
+the code. The weights actually distributed on HuggingFace under
+`TMElyralab/MuseTalk` carry `creativeml-openrail-m`, confirmed against the
+HuggingFace API. OpenRAIL-M is usable commercially — its Attachment A contains
+no anti-impersonation clause, and its restrictions are satisfiable by a
+consented memorial product — but Section II obliges the licensee to carry the
+use restrictions forward as an enforceable provision in any agreement governing
+distribution. In practice: Attachment A must appear in the customer terms of
+use with flow-down. That is lawyer time, not an engineering blocker, but
+nothing in this design previously said so.
+
+Two further corrections to the same table, both verified directly:
+
+- `stabilityai/sd-vae-ft-mse`, loaded at inference, is MIT. Clean.
+- `openai/whisper-tiny`, loaded at inference as the audio encoder, is
+  Apache-2.0. Clean.
+- The face-parsing weights used in preprocessing are trained on CelebAMask-HQ,
+  whose terms restrict use to non-commercial research. They are cached per
+  avatar and never touched at runtime, but they must still be replaced. The
+  replacement is the shared face-geometry module in the next plan.
 
 ### Licence risk that remains open
 
@@ -67,6 +89,19 @@ This is a real, unresolved commercial risk and is tracked as task LIC-1 in the
 implementation plan: audit every weight file the renderer loads at runtime and
 record its licence. The design below isolates all such weights behind a single
 component so that replacing any one of them is a contained change.
+
+### A licence problem in what already shipped
+
+`piper-tts`, which sub-project 1 ships and imports in-process, is
+**GPL-3.0-or-later** — confirmed from the installed package metadata, which
+also ships `COPYING` and a compiled `espeakbridge.so`. `src/avatar/services/
+speech.py` described it as MIT. That comment was wrong.
+
+Loading a GPL-3.0 library into the same process as proprietary application code
+is the case the licence is designed to reach. Running it as a separate service
+is aggregation rather than linking, which is the fix taken in the correctness
+plan. The Piper *voice* files are licensed separately from the engine, and
+`es_ES-davefx-medium.onnx.json` carries no licence field at all.
 
 ### The candidate baseline repository
 
@@ -269,11 +304,30 @@ rejection after payment is a refund; a rejection before it is a filter.
 | TTS | Chatterbox, MPS or CPU | Chatterbox, GPU |
 | Renderer | `VisemeRenderer` | `MuseTalkRenderer` |
 
-MuseTalk is not offered as a local option. Its own README measures roughly five
-minutes to render an eight-second clip on a 4 GB RTX 3050 in fp16; CPU
-execution is slower by a further order of magnitude. That is not a degraded
-experience, it is an unusable development loop, and the interface in section
-5.5 exists precisely so that nothing is lost by omitting it locally.
+MuseTalk was excluded locally on the strength of its README's "five minutes per
+eight-second clip." **That figure is misleading and this document should not
+have relied on it.** It was measured on an RTX 3050 Ti Laptop GPU with **4 GB**
+of VRAM, running an 850M-parameter UNet alongside a VAE and Whisper. It
+measures memory starvation, not compute.
+
+Benchmarked directly on this project's target Apple silicon (M3 Max, 36 GB
+unified, MPS, fp16), the same networks sustain:
+
+| Configuration | Sustained |
+|---|---|
+| 256 px, batch 8, faithful SD VAE | 10.8 fps |
+| 256 px, batch 8, TAESD decoder | 30.4 fps |
+| 192 px, batch 8, TAESD decoder | 51.2 fps |
+
+The decoder, not the UNet, is the bottleneck on MPS; TAESD is MIT and decodes
+the same latent space. The genuine Apple-silicon blocker is `mmpose`/DWPose in
+*preprocessing*, which is a one-time offline step per avatar, not a runtime
+cost.
+
+So the renderer interface in section 5.5 is still the right design — it is what
+lets the local and cloud backends differ at all — but its justification is now
+that local runs a cheaper decoder at a lower resolution, not that the model
+cannot run here.
 
 No component requires installing a desktop application. Python dependencies
 resolve through `uv`, a single static binary; JavaScript through `npm`. Local
@@ -308,8 +362,49 @@ retained for the life of the avatar and destroyed with it.
 ## 8. Legal position
 
 California AB 1836 extends post-mortem personality rights to cover digital
-replicas. Tennessee's ELVIS Act covers voice and likeness. There is no federal
-statute; exposure varies by state.
+replicas. Tennessee's ELVIS Act covers voice and likeness. There is still no US
+federal statute; state exposure varies.
+
+**This section was written as though US state law were the whole picture. It is
+not, and one obligation is already live.**
+
+Verified independently:
+
+- **EU AI Act Article 50 has applied since 2 August 2026.** Providers of AI
+  systems generating synthetic audio, image or video must mark outputs in a
+  **machine-readable** form so they are detectable as AI-generated. The
+  Commission adopted implementing guidelines on 20 July 2026. Penalties reach
+  €15M or 3% of worldwide annual turnover. This product generates synthetic
+  video of a real person and is squarely in scope. The persistent banner in
+  section 5.1 satisfies the human-facing half of Article 50 only; machine
+  -readable marking is a separate obligation and is addressed in section 8.1.
+
+Reported but **not independently verified** — each needs counsel before it is
+relied on:
+
+- New York post-mortem digital-replica right, reported signed 11 December 2025.
+- China's deep synthesis provisions: consent plus a visible label plus an
+  invisible watermark.
+- NO FAKES Act, reported out of Senate Judiciary in June 2026, not law. It
+  vests post-mortem rights in "executors, heirs, assignees, or devisees" —
+  the same channel the consent gate already models.
+- A Danish likeness right, reportedly in force around July 2026.
+
+The encouraging reading, if these hold: every regime treats family or estate
+authorisation as the intended consent path, so the consent gate is aimed
+correctly. The gap is output marking, not permission.
+
+### 8.1 Synthetic-content marking
+
+Every published video frame carries a machine-readable mark identifying it as
+synthetic, and each session records a manifest naming the models that produced
+it. Marking applies to idle frames as well as spoken ones: a frame is synthetic
+whether or not the likeness is talking.
+
+This is an engineering answer to a marking obligation, not a compliance
+certification. A C2PA-conformant implementation and counsel review are both
+still required. The manifest is shaped to carry C2PA assertion fields so that
+path stays open.
 
 Concrete consequences for this design, all reflected above:
 

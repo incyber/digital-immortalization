@@ -56,11 +56,21 @@ def build_stt(cfg: Settings) -> STTService:
 def build_tts(cfg: Settings) -> TTSService:
     """Text to speech.
 
-    Piper for now: small, fast on CPU, MIT, and cross-platform, so local and
-    cloud sound identical. Chatterbox replaces it in sub-project 3, when the
-    voice becomes a clone of a specific person rather than a stock voice. Both
-    satisfy Pipecat's TTSService contract, so that swap touches this function
-    and nothing else.
+    Piper: small, fast on CPU, and cross-platform, so local and cloud sound
+    identical.
+
+    Licensing, which an earlier version of this comment got wrong: piper-tts is
+    **GPL-3.0-or-later**, not MIT. Importing it puts a GPL library in the same
+    process as the rest of this application, which is the case that licence is
+    written to reach. The default backend therefore runs Piper as a separate
+    HTTP service - aggregation rather than linking - and the in-process path
+    exists only for local convenience and must be selected deliberately. Voice
+    files are licensed separately from the engine and several, including
+    es_ES-davefx-medium, carry no licence field at all.
+
+    Chatterbox replaces Piper in sub-project 3, when the voice becomes a clone
+    of a specific person rather than a stock voice. Both satisfy Pipecat's
+    TTSService contract, so that swap touches this function and nothing else.
     """
     return PiperTTSService(
         settings=PiperTTSService.Settings(voice=cfg.tts_voice),
