@@ -52,3 +52,20 @@ async def test_dev_secret_is_rejected_outside_development(cfg):
 
     with pytest.raises(ValueError, match="development secret"):
         assert_production_ready(cfg)
+
+
+async def test_agent_is_dispatched_into_the_room(db, cfg, verified_avatar):
+    from avatar.gateway.dispatch import NullDispatcher
+
+    dispatcher = NullDispatcher()
+    out = await open_session(db, cfg, verified_avatar.id, dispatcher)
+    assert dispatcher.calls == [(out["room"], verified_avatar.id, verified_avatar.profile_path)]
+
+
+async def test_no_agent_is_dispatched_when_consent_is_refused(db, cfg, avatar):
+    from avatar.gateway.dispatch import NullDispatcher
+
+    dispatcher = NullDispatcher()
+    with pytest.raises(ConsentError):
+        await open_session(db, cfg, avatar.id, dispatcher)
+    assert dispatcher.calls == [], "a refused call must never put an agent in a room"

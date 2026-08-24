@@ -25,7 +25,7 @@ from pathlib import Path
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.runner import WorkerRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
@@ -164,7 +164,9 @@ async def run_agent(room: str, token: str, profile_path: str, assets_path: str |
         await task.cancel()
 
     logger.info(f"agent joining room {room}")
-    await PipelineRunner(handle_sigint=False).run(task)
+    runner = WorkerRunner(handle_sigint=False)
+    runner.add_workers(task)
+    await runner.run()
 
 
 def main() -> None:

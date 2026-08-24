@@ -15,7 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from avatar.config import Settings
 from avatar.gateway.consent import assert_consented
-from avatar.gateway.models import Session
+from avatar.gateway.dispatch import AgentDispatcher
+from avatar.gateway.models import Avatar, Session
 
 # Long enough for a real conversation, short enough that a leaked token is not
 # a standing invitation.
@@ -45,18 +46,30 @@ def mint_token(cfg: Settings, room: str, identity: str, name: str) -> str:
     )
 
 
-async def open_session(db: AsyncSession, cfg: Settings, avatar_id: str) -> dict[str, str]:
-    """Create a room and return joining details.
+async def open_session(
+    db: AsyncSession,
+    cfg: Settings,
+    avatar_id: str,
+    dispatcher: "AgentDispatcher | None" = None,
+) -> dict[str, str]:
+    """Create a room, put an agent in it, and return joining details.
 
-    Raises ConsentError before doing anything else. Nothing is written and no
-    token exists for an avatar that has not cleared the gate.
+    Raises ConsentError before doing anything else. Nothing is written, no
+    token exists, and no agent is dispatched for an avatar that has not cleared
+    the gate.
     """
     await assert_consented(db, avatar_id)
+
+    avatar = await db.get(Avatar, avatar_id)
+    assert avatar is not None  # assert_consented already established this
 
     room = f"call-{uuid.uuid4().hex[:12]}"
     session = Session(avatar_id=avatar_id, room_name=room)
     db.add(session)
     await db.commit()
+
+    if dispatcher is not None:
+        await dispatcher.dispatch(room, avatar_id, avatar.profile_path)
 
     return {
         "session_id": session.id,

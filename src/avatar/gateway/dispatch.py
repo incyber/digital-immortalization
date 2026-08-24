@@ -1,0 +1,73 @@
+"""Getting an agent into the room the gateway just created.
+
+A room with a token and nobody in it is not a call. Something has to put the
+avatar on the other end.
+
+This implementation spawns a local process per session. That is correct for one
+machine and wrong for a fleet: in cloud the same responsibility belongs to a
+pool of pre-warmed workers, because process start plus model load is far more
+than the latency budget allows and because GPU capacity has to be scheduled
+rather than assumed. The interface here is deliberately the one a pool would
+also satisfy, so that replacement does not reach into the gateway.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+from typing import Protocol
+
+from loguru import logger
+
+from avatar.config import Settings
+
+
+class AgentDispatcher(Protocol):
+    async def dispatch(self, room: str, avatar_id: str, profile_path: str) -> None: ...
+
+
+class LocalProcessDispatcher:
+    """One subprocess per session. Development only."""
+
+    def __init__(self, cfg: Settings):
+        self._cfg = cfg
+        self._processes: dict[str, subprocess.Popen] = {}
+
+    async def dispatch(self, room: str, avatar_id: str, profile_path: str) -> None:
+        from avatar.gateway.sessions import mint_token
+
+        token = mint_token(
+            self._cfg, room, identity=f"avatar-{avatar_id}", name="Avatar"
+        )
+
+        assets = Path(self._cfg.assets_dir) / "avatars" / avatar_id
+        command = [
+            sys.executable, "-m", "avatar.realtime.agent",
+            "--room", room,
+            "--token", token,
+            "--profile", profile_path,
+        ]
+        if assets.exists():
+            command += ["--assets", str(assets)]
+
+        logger.info(f"dispatching agent into {room}")
+        self._processes[room] = subprocess.Popen(command)
+
+    def shutdown(self) -> None:
+        for room, proc in self._processes.items():
+            if proc.poll() is None:
+                logger.info(f"terminating agent for {room}")
+                proc.terminate()
+        self._processes.clear()
+
+
+class NullDispatcher:
+    """Records dispatches without starting anything. Used by tests, which care
+    that dispatch happens after the consent gate and not that a process runs."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, str, str]] = []
+
+    async def dispatch(self, room: str, avatar_id: str, profile_path: str) -> None:
+        self.calls.append((room, avatar_id, profile_path))

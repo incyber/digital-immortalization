@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from avatar.config import Settings, get_settings
 from avatar.gateway.consent import ConsentError
 from avatar.gateway.db import create_all, get_db
+from avatar.gateway.dispatch import LocalProcessDispatcher
 from avatar.gateway.sessions import open_session
 
 
@@ -27,10 +28,15 @@ class SessionRequest(BaseModel):
 def create_app(cfg: Settings | None = None) -> FastAPI:
     settings = cfg or get_settings()
 
+    dispatcher = LocalProcessDispatcher(settings)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await create_all(settings)
         yield
+        # Agents outlive a request but not the gateway. Leaving them running
+        # would hold GPU capacity and microphones open after a restart.
+        dispatcher.shutdown()
 
     app = FastAPI(title="Avatar gateway", lifespan=lifespan)
 
@@ -51,7 +57,7 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
     @app.post("/api/sessions")
     async def create_session(body: SessionRequest, db: AsyncSession = Depends(get_db)):
         try:
-            return await open_session(db, settings, body.avatar_id)
+            return await open_session(db, settings, body.avatar_id, dispatcher)
         except ConsentError as exc:
             # 403 rather than 404 even when no record exists: the avatar may be
             # real, and the reason it cannot be called is permission.
