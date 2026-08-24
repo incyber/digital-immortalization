@@ -50,7 +50,7 @@ async def open_session(
     db: AsyncSession,
     cfg: Settings,
     avatar_id: str,
-    dispatcher: "AgentDispatcher | None" = None,
+    dispatcher: AgentDispatcher | None = None,
 ) -> dict[str, str]:
     """Create a room, put an agent in it, and return joining details.
 

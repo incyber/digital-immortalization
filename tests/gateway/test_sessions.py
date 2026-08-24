@@ -46,9 +46,9 @@ async def test_dev_secret_is_rejected_outside_development(cfg):
     # The LiveKit dev server ships a 6-byte secret. It is fine on localhost and
     # a real weakness anywhere else, so shipping it to cloud must be a failure
     # rather than a warning nobody reads.
-    from avatar.gateway.sessions import assert_production_ready
-
     import pytest
+
+    from avatar.gateway.sessions import assert_production_ready
 
     with pytest.raises(ValueError, match="development secret"):
         assert_production_ready(cfg)

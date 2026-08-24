@@ -7,7 +7,7 @@ appears in two places eventually differs between them.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,5 +66,5 @@ async def revoke(db: AsyncSession, avatar_id: str, note: str) -> None:
         raise ConsentError(f"no consent record for avatar {avatar_id}")
 
     record.status = ConsentStatus.REVOKED
-    record.notes = f"{record.notes or ''}\nrevoked {datetime.now(timezone.utc).isoformat()}: {note}"
+    record.notes = f"{record.notes or ''}\nrevoked {datetime.now(UTC).isoformat()}: {note}"
     await db.commit()

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -20,7 +20,7 @@ def _uuid() -> str:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -49,7 +49,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
-    avatars: Mapped[list["Avatar"]] = relationship(back_populates="owner")
+    avatars: Mapped[list[Avatar]] = relationship(back_populates="owner")
 
 
 class Avatar(Base):
@@ -66,7 +66,7 @@ class Avatar(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     owner: Mapped[User] = relationship(back_populates="avatars")
-    consent: Mapped["ConsentRecord | None"] = relationship(
+    consent: Mapped[ConsentRecord | None] = relationship(
         back_populates="avatar", uselist=False
     )
 

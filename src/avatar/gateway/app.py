@@ -56,7 +56,10 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/sessions")
-    async def create_session(body: SessionRequest, db: AsyncSession = Depends(get_db)):
+    async def create_session(
+        body: SessionRequest,
+        db: AsyncSession = Depends(get_db),  # noqa: B008 - FastAPI injection idiom
+    ):
         try:
             return await open_session(db, settings, body.avatar_id, dispatcher)
         except ConsentError as exc:

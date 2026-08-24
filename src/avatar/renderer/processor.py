@@ -17,9 +17,9 @@ from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
     Frame,
+    InterruptionFrame,
     OutputImageRawFrame,
     StartFrame,
-    InterruptionFrame,
     TTSAudioRawFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -14,7 +15,7 @@ def test_shipped_profile_loads():
 
 
 def test_placeholder_crisis_line_is_refused(tmp_path):
-    p = json.loads(open(PROFILE_PATH, encoding="utf-8").read())
+    p = json.loads(Path(PROFILE_PATH).read_text(encoding="utf-8"))
     p["crisis_line_number"] = "TBD"
     f = tmp_path / "bad.json"
     f.write_text(json.dumps(p), encoding="utf-8")

@@ -4,7 +4,6 @@ starts and connection completes a beat later."""
 import asyncio
 
 import pytest
-import pytest_asyncio
 from pipecat.frames.frames import OutputImageRawFrame
 from pipecat.processors.frame_processor import FrameDirection
 

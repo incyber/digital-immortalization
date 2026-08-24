@@ -13,7 +13,7 @@ also satisfy, so that replacement does not reach into the gateway.
 
 from __future__ import annotations
 
-import subprocess
+import asyncio
 import sys
 from pathlib import Path
 from typing import Protocol
@@ -32,7 +32,7 @@ class LocalProcessDispatcher:
 
     def __init__(self, cfg: Settings):
         self._cfg = cfg
-        self._processes: dict[str, subprocess.Popen] = {}
+        self._processes: dict[str, asyncio.subprocess.Process] = {}
 
     async def dispatch(self, room: str, avatar_id: str, profile_path: str) -> None:
         from avatar.gateway.sessions import mint_token
@@ -52,11 +52,13 @@ class LocalProcessDispatcher:
             command += ["--assets", str(assets)]
 
         logger.info(f"dispatching agent into {room}")
-        self._processes[room] = subprocess.Popen(command)
+        # create_subprocess_exec rather than subprocess.Popen: spawning blocks,
+        # and this runs inside the request that is about to return a token.
+        self._processes[room] = await asyncio.create_subprocess_exec(*command)
 
     def shutdown(self) -> None:
         for room, proc in self._processes.items():
-            if proc.poll() is None:
+            if proc.returncode is None:
                 logger.info(f"terminating agent for {room}")
                 proc.terminate()
         self._processes.clear()

@@ -18,7 +18,7 @@ from collections.abc import Callable
 
 from livekit import rtc
 from loguru import logger
-from pipecat.frames.frames import CancelFrame, EndFrame, Frame, OutputImageRawFrame, StartFrame
+from pipecat.frames.frames import CancelFrame, EndFrame, Frame, OutputImageRawFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 # LiveKit takes RGBA; the renderer produces RGB24. One alpha byte per pixel is
@@ -66,7 +66,7 @@ class LiveKitVideoPublisher(FrameProcessor):
         try:
             room = self._room_provider()
             participant = room.local_participant
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise _NotConnectedYet(str(exc)) from exc
 
         self._source = rtc.VideoSource(self._width, self._height)

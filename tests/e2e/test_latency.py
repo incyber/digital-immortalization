@@ -99,7 +99,7 @@ async def test_time_to_first_reply(cfg):
 
         try:
             await asyncio.wait_for(heard.wait(), timeout=60)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
     finally:
         await room.disconnect()

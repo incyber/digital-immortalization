@@ -37,6 +37,7 @@ from pipecat.transports.livekit.transport import LiveKitParams, LiveKitTransport
 
 from avatar.config import Settings, get_settings
 from avatar.persona import build_system_prompt, load_profile
+from avatar.realtime.video_publisher import LiveKitVideoPublisher
 from avatar.renderer.base import RendererStage
 from avatar.renderer.plates import AvatarAssets, synthetic_assets
 from avatar.renderer.processor import RendererProcessor
@@ -44,7 +45,6 @@ from avatar.renderer.viseme import VisemeRenderer
 from avatar.safety.processor import CrisisProcessor
 from avatar.services.speech import build_stt, build_tts
 from avatar.vision.processor import VisionSampler
-from avatar.realtime.video_publisher import LiveKitVideoPublisher
 from avatar.vision.state import SceneState
 
 

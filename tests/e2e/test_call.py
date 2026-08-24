@@ -194,7 +194,7 @@ async def test_speaking_to_the_avatar_produces_a_spoken_reply(cfg):
         # a bare wait_for would raise TimeoutError with no diagnostic.
         try:
             await asyncio.wait_for(reply_audio.wait(), timeout=90)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
     finally:
         await room.disconnect()

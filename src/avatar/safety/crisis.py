@@ -9,7 +9,7 @@ a model asked to break character may decline to.
 import re
 import unicodedata
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 
 from avatar.safety.keywords import DEFAULT_LOCALE, SAFETY_TEMPLATE, TERMS
 
@@ -29,7 +29,7 @@ def normalise(text: str) -> str:
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
-@lru_cache(maxsize=None)
+@cache
 def _patterns(locale: str) -> tuple[tuple[str, re.Pattern[str]], ...]:
     """Compiled whole-word patterns for a locale, built once per process.
 
