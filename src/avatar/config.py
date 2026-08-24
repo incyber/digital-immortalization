@@ -61,6 +61,15 @@ class Settings(BaseSettings):
 
     assets_dir: str = "assets"
 
+    # Origins allowed to call the gateway. Listed explicitly rather than
+    # wildcarded because these responses carry room tokens. The dev port is
+    # pinned high to avoid colliding with whatever else is on 3000.
+    web_origins: str = "http://localhost:3100,http://127.0.0.1:3100"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.web_origins.split(",") if o.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:

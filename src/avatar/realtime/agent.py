@@ -41,6 +41,7 @@ from avatar.renderer.viseme import VisemeRenderer
 from avatar.safety.processor import CrisisProcessor
 from avatar.services.speech import build_stt, build_tts
 from avatar.vision.processor import VisionSampler
+from avatar.realtime.video_publisher import LiveKitVideoPublisher
 from avatar.vision.state import SceneState
 
 
@@ -113,6 +114,14 @@ def build_pipeline(
             llm,
             tts,
             RendererProcessor(stage, avatar_id=profile["id"]),
+            # Publishes video directly: Pipecat's LiveKit transport implements
+            # video input only. See video_publisher.py.
+            LiveKitVideoPublisher(
+                lambda: transport._client.room,
+                width=cfg.video_width,
+                height=cfg.video_height,
+                fps=cfg.video_fps,
+            ),
             transport.output(),
             aggregators.assistant(),
         ]
@@ -165,7 +174,7 @@ async def run_agent(room: str, token: str, profile_path: str, assets_path: str |
 
     logger.info(f"agent joining room {room}")
     runner = WorkerRunner(handle_sigint=False)
-    runner.add_workers(task)
+    await runner.add_workers(task)
     await runner.run()
 
 

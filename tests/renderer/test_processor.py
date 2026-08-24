@@ -4,6 +4,7 @@ wiring rather than about pixels."""
 import asyncio
 
 import pytest
+import pytest_asyncio
 from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     InterruptionFrame,
@@ -48,16 +49,34 @@ def collected():
     return []
 
 
-@pytest.fixture
-def processor(collected):
-    stage = FakeStage()
-    p = RendererProcessor(stage)
+async def wire(processor, collected):
+    """Give a processor the task manager it would get from a real pipeline.
+
+    RendererProcessor publishes idle frames from a managed background task, so
+    it cannot be exercised as a bare object; without this the first idle start
+    raises "TaskManager is not initialized".
+    """
+    from pipecat.clocks.system_clock import SystemClock
+    from pipecat.processors.frame_processor import FrameProcessorSetup
+    from pipecat.utils.asyncio.task_manager import TaskManager
+
+    manager = TaskManager(loop=asyncio.get_running_loop())
+    await processor.setup(
+        FrameProcessorSetup(
+            clock=SystemClock(), task_manager=manager, pipeline_worker=None
+        )
+    )
 
     async def capture(frame, direction=FrameDirection.DOWNSTREAM):
         collected.append(frame)
 
-    p.push_frame = capture  # type: ignore[method-assign]
-    return p
+    processor.push_frame = capture  # type: ignore[method-assign]
+    return processor
+
+
+@pytest_asyncio.fixture
+async def processor(collected):
+    return await wire(RendererProcessor(FakeStage()), collected)
 
 
 async def test_audio_is_passed_through_before_any_video(processor, collected):
@@ -75,7 +94,7 @@ async def test_audio_produces_video(processor, collected):
 async def test_interruption_cancels_the_stage(processor, collected):
     await processor.process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
     assert processor._stage.cancels == 1
-    processor._stop_idle()
+    await processor._stop_idle()
 
 
 async def test_renderer_failure_does_not_swallow_audio(collected):
@@ -84,17 +103,12 @@ async def test_renderer_failure_does_not_swallow_audio(collected):
             raise RuntimeError("gpu fell over")
             yield  # pragma: no cover
 
-    p = RendererProcessor(BrokenStage())
-
-    async def capture(frame, direction=FrameDirection.DOWNSTREAM):
-        collected.append(frame)
-
-    p.push_frame = capture  # type: ignore[method-assign]
+    p = await wire(RendererProcessor(BrokenStage()), collected)
     await p.process_frame(
         TTSAudioRawFrame(audio=b"\x00\x00" * 100, sample_rate=16000, num_channels=1),
         FrameDirection.DOWNSTREAM,
     )
-    p._stop_idle()
+    await p._stop_idle()
     assert any(isinstance(f, TTSAudioRawFrame) for f in collected), (
         "a broken renderer must degrade the video, not break the call"
     )
@@ -103,7 +117,7 @@ async def test_renderer_failure_does_not_swallow_audio(collected):
 async def test_bot_stopped_speaking_resumes_idle(processor, collected):
     await processor.process_frame(BotStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await asyncio.sleep(0.03)
-    processor._stop_idle()
+    await processor._stop_idle()
     assert any(isinstance(f, OutputImageRawFrame) for f in collected), (
         "a video track that stops publishing reads as a dropped connection"
     )

@@ -50,7 +50,7 @@ class RendererProcessor(FrameProcessor):
             # Audio first, so it is never delayed by rendering, and so a
             # renderer exception cannot swallow the reply.
             await self.push_frame(frame, direction)
-            self._stop_idle()
+            await self._stop_idle()
             self._speaking = True
             await self._render(frame)
             return
@@ -71,7 +71,7 @@ class RendererProcessor(FrameProcessor):
             return
 
         if isinstance(frame, (EndFrame, CancelFrame)):
-            self._stop_idle()
+            await self._stop_idle()
             await self._stage.cancel()
             await self.push_frame(frame, direction)
             return
@@ -95,13 +95,16 @@ class RendererProcessor(FrameProcessor):
             self._start_idle()
 
     def _start_idle(self) -> None:
+        # Uses the processor's own task manager rather than asyncio directly:
+        # a raw task is not tracked by the pipeline, so it is not cancelled on
+        # shutdown and can be collected before it ever runs.
         if self._idle_task is not None and not self._idle_task.done():
             return
-        self._idle_task = asyncio.create_task(self._publish_idle())
+        self._idle_task = self.create_task(self._publish_idle())
 
-    def _stop_idle(self) -> None:
+    async def _stop_idle(self) -> None:
         if self._idle_task is not None:
-            self._idle_task.cancel()
+            await self.cancel_task(self._idle_task)
             self._idle_task = None
 
     async def _publish_idle(self) -> None:

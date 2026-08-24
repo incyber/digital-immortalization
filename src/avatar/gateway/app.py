@@ -41,10 +41,11 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Avatar gateway", lifespan=lifespan)
 
     # The web client is served from a different origin in development. Listed
-    # explicitly rather than wildcarded, because these responses carry tokens.
+    # explicitly rather than wildcarded, because these responses carry room
+    # tokens and a wildcard would let any page request one.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST"],
         allow_headers=["*"],

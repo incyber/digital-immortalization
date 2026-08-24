@@ -53,3 +53,35 @@ def test_pipeline_places_the_renderer_after_tts():
 def test_shipped_profile_is_usable_by_the_agent():
     profile = load_profile("src/avatar/profiles/colon.json")
     assert profile["id"] and profile["crisis_line_number"]
+
+
+def test_worker_is_awaited_before_the_runner_starts():
+    # add_workers is a coroutine. Calling it without awaiting registers nothing
+    # and the agent joins a room then does nothing, which is silent.
+    from pathlib import Path
+
+    src = Path("src/avatar/realtime/agent.py").read_text()
+    assert "await runner.add_workers(task)" in src
+
+
+def test_video_publisher_sits_between_renderer_and_transport():
+    # Pipecat's LiveKit transport discards video frames (write_video_frame
+    # returns False), so the publisher must consume them before they reach it.
+    from pathlib import Path
+
+    src = Path("src/avatar/realtime/agent.py").read_text()
+    assert src.index("RendererProcessor(stage") < src.index("LiveKitVideoPublisher(")
+    assert src.index("LiveKitVideoPublisher(") < src.index("transport.output()")
+
+
+def test_pipecat_livekit_transport_still_lacks_video_output():
+    # If a future Pipecat release implements this, the direct publisher becomes
+    # redundant and should be removed. This test is the reminder.
+    import inspect
+
+    from pipecat.transports.livekit.transport import LiveKitOutputTransport
+
+    source = inspect.getsource(LiveKitOutputTransport.write_video_frame)
+    assert "return False" in source, (
+        "Pipecat's LiveKit transport now writes video; drop LiveKitVideoPublisher"
+    )

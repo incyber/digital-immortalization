@@ -59,9 +59,11 @@ export function CallStage({
   onLeave: () => void;
 }) {
   const [muted, setMuted] = useState(false);
+  // Undefined until we know. A machine with no webcam, or a visitor who
+  // declines it, must still get a call: the camera feeds the vision channel,
+  // which is an enrichment, while the microphone is the conversation itself.
+  const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(null);
 
-  // Autoplay is blocked until the page has been interacted with. Reaching the
-  // call requires a click, so by this point it is allowed.
   useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => {
@@ -69,19 +71,53 @@ export function CallStage({
     };
   }, []);
 
+  // Probe before connecting. LiveKitRoom treats a failed track request as a
+  // connection failure and disconnects, so asking for a camera that is not
+  // there would end the call rather than degrade it.
+  useEffect(() => {
+    let cancelled = false;
+    navigator.mediaDevices
+      ?.getUserMedia({ video: true })
+      .then((stream) => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (!cancelled) setCameraAvailable(true);
+      })
+      .catch(() => {
+        if (!cancelled) setCameraAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (cameraAvailable === null) {
+    return (
+      <div className="flex h-full w-full items-center justify-center text-neutral-500">
+        Checking your camera and microphone…
+      </div>
+    );
+  }
+
   return (
     <LiveKitRoom
       serverUrl={session.url}
       token={session.token}
       connect
       audio={!muted}
-      video
+      video={cameraAvailable}
       onDisconnected={onLeave}
       className="relative h-full w-full bg-neutral-950"
     >
       <div className="relative h-full w-full">
         <AvatarVideo />
-        <SelfView />
+        {cameraAvailable ? (
+          <SelfView />
+        ) : (
+          <div className="absolute bottom-5 right-5 rounded-lg border border-white/10
+                          bg-black/60 px-3 py-2 text-xs text-neutral-400">
+            No camera — the avatar can hear you but cannot see you
+          </div>
+        )}
       </div>
 
       <RoomAudioRenderer />
