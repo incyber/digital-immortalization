@@ -34,12 +34,12 @@ The single highest-leverage latency change, and the one that makes the latency t
 **Interfaces:**
 - Produces: `async def warm(cfg, stt, tts, llm) -> WarmupReport`, where `WarmupReport` records per-stage elapsed milliseconds and any failure. Never raises.
 
-- [ ] **Step 1: Write the failing unit test** — fakes for each service, asserting all are exercised, that a failing service is logged rather than propagated, and that the report records the failure.
-- [ ] **Step 2: Run it, confirm failure.**
-- [ ] **Step 3: Implement.** `asyncio.gather(..., return_exceptions=True)` over four coroutines: push ~1 s of silence through STT, request a one-token completion from the LLM, synthesise one short word through TTS, and construct the turn analyser eagerly. A warm-up failure must never prevent a call from starting — it costs latency, not the session.
-- [ ] **Step 4: Call it from `run_agent()`** after `build_pipeline()` and before `runner.run()`.
-- [ ] **Step 5: Restructure the latency test.** Replace the single measured turn with five sequential turns. Report turn 1 separately as cold; assert the budget against the **median of turns 2–5**. Without this the warm-up is unfalsifiable.
-- [ ] **Step 6: Measure and record the real number. Commit.**
+- [x] **Step 1: Write the failing unit test** — fakes for each service, asserting all are exercised, that a failing service is logged rather than propagated, and that the report records the failure.
+- [x] **Step 2: Run it, confirm failure.**
+- [x] **Step 3: Implement.** `asyncio.gather(..., return_exceptions=True)` over four coroutines: push ~1 s of silence through STT, request a one-token completion from the LLM, synthesise one short word through TTS, and construct the turn analyser eagerly. A warm-up failure must never prevent a call from starting — it costs latency, not the session.
+- [x] **Step 4: Call it from `run_agent()`** after `build_pipeline()` and before `runner.run()`.
+- [x] **Step 5: Restructure the latency test.** Replace the single measured turn with five sequential turns. Report turn 1 separately as cold; assert the budget against the **median of turns 2–5**. Without this the warm-up is unfalsifiable.
+- [x] **Step 6: Measure and record the real number. Commit.**
 
 ---
 
@@ -49,12 +49,12 @@ Documentation, but not cosmetic: three of these are licence statements that some
 
 **Files:** `docs/superpowers/specs/2026-08-24-live-avatar-call-design.md`, `src/avatar/services/speech.py`, `README.md`
 
-- [ ] **Step 1: Design §3** — split the MuseTalk row into code (MIT) and weights (OpenRAIL-M), and record the Section II flow-down obligation.
-- [ ] **Step 2: Design §6** — remove the "unusable development loop" justification and record the measured MPS figures with the 4 GB caveat that produced the wrong number.
-- [ ] **Step 3: `speech.py`** — correct the Piper comment from MIT to GPL-3.0-or-later and state the in-process linking consequence.
-- [ ] **Step 4: README** — correct the latency section to cold/warm, and the licence line.
-- [ ] **Step 5: Design §8** — add the regulatory items, each marked verified or unverified. Only EU AI Act Article 50 has been independently checked.
-- [ ] **Step 6: Commit.**
+- [x] **Step 1: Design §3** — split the MuseTalk row into code (MIT) and weights (OpenRAIL-M), and record the Section II flow-down obligation.
+- [x] **Step 2: Design §6** — remove the "unusable development loop" justification and record the measured MPS figures with the 4 GB caveat that produced the wrong number.
+- [x] **Step 3: `speech.py`** — correct the Piper comment from MIT to GPL-3.0-or-later and state the in-process linking consequence.
+- [x] **Step 4: README** — correct the latency section to cold/warm, and the licence line.
+- [x] **Step 5: Design §8** — add the regulatory items, each marked verified or unverified. Only EU AI Act Article 50 has been independently checked.
+- [x] **Step 6: Commit.**
 
 ---
 
@@ -64,12 +64,12 @@ Documentation, but not cosmetic: three of these are licence statements that some
 
 **Files:** `src/avatar/services/speech.py`, `infra/docker-compose.yml`, `src/avatar/config.py`, `tests/test_speech.py`
 
-- [ ] **Step 1: Write the failing test** — `build_tts` returns an HTTP-backed service when `tts_backend="http"`, and the in-process path is reachable only when explicitly selected.
-- [ ] **Step 2: Run it, confirm failure.**
-- [ ] **Step 3: Add a Piper HTTP sidecar** to compose, and a `tts_backend` setting defaulting to `http`.
-- [ ] **Step 4: Implement the branch** in `build_tts`.
-- [ ] **Step 5: Verify the voice licence separately** — `es_ES-davefx-medium.onnx.json` carries no licence field. Record what is found, including "unknown".
-- [ ] **Step 6: Confirm end to end, then commit.**
+- [x] **Step 1: Write the failing test** — `build_tts` returns an HTTP-backed service when `tts_backend="http"`, and the in-process path is reachable only when explicitly selected.
+- [x] **Step 2: Run it, confirm failure.**
+- [x] **Step 3: Add a Piper HTTP sidecar** to compose, and a `tts_backend` setting defaulting to `http`.
+- [x] **Step 4: Implement the branch** in `build_tts`.
+- [x] **Step 5: Verify the voice licence separately** — `es_ES-davefx-medium.onnx.json` carries no licence field. Record what is found, including "unknown".
+- [x] **Step 6: Confirm end to end, then commit.**
 
 ---
 
@@ -82,14 +82,20 @@ EU AI Act Article 50 has applied since 2 August 2026 and requires providers of s
 **Interfaces:**
 - Produces: `embed(frame_rgb, payload_bits) -> np.ndarray`, `detect(frame_rgb) -> bytes | None`, and `build_manifest(avatar_id, session_id, model_ids) -> dict`.
 
-- [ ] **Step 1: Write the failing tests** — a marked frame decodes back to its payload; an unmarked frame returns `None`; marking is imperceptible above a stated PSNR floor; marking survives the RGB→RGBA conversion the publisher performs.
-- [ ] **Step 2: Run them, confirm failure.**
-- [ ] **Step 3: Implement.** A fixed-pattern spatial watermark carrying a short identifier, applied to every rendered frame; plus a declaration manifest recording which models produced the session.
-- [ ] **Step 4: Wire into the renderer** so no published frame is unmarked, including idle frames.
-- [ ] **Step 5: Verify end to end** — subscribe as a headless participant, decode the payload from a received frame.
-- [ ] **Step 6: Commit.**
+- [x] **Step 1: Write the failing tests** — a marked frame decodes back to its payload; an unmarked frame returns `None`; marking is imperceptible above a stated PSNR floor; marking survives the RGB→RGBA conversion the publisher performs.
+- [x] **Step 2: Run them, confirm failure.**
+- [x] **Step 3: Implement.** A fixed-pattern spatial watermark carrying a short identifier, applied to every rendered frame; plus a declaration manifest recording which models produced the session.
+- [x] **Step 4: Wire into the renderer** so no published frame is unmarked, including idle frames.
+- [x] **Step 5: Verify end to end** — subscribe as a headless participant, decode the payload from a received frame.
+- [x] **Step 6: Commit.**
 
 **Honest scope:** this is a defensible engineering answer to a marking obligation, not legal compliance certification. A C2PA-conformant implementation and counsel review are both still required; the manifest is structured to carry C2PA assertion fields so that path stays open.
+
+**Outcome, and a design change made during execution.** Steps 1–4 were built as specified: a spatial watermark on every rendered frame, ten passing unit tests, wired into the publisher so no frame could escape unmarked. Step 5 then failed. Thirty consecutive frames received over a real WebRTC connection decoded to nothing.
+
+The cause is structural, not a bug: WebRTC re-encodes every frame, and a watermark faint enough to be invisible on a recreation of someone's late parent does not survive VP8. In-band marking of a live stream cannot work, and the unit tests could never have caught it because they never crossed a codec.
+
+Marking therefore moved out of band — participant attributes plus a manifest in participant metadata, both carried on the signalling channel. The watermark module is retained for media this system encodes itself, where the mark does survive, and its docstring now says which is which. One further fix fell out of it: the agent's token needed `canUpdateOwnMetadata`, and visitors must not have it, or a viewer could delete the declaration.
 
 ---
 
