@@ -102,10 +102,10 @@ infra/              docker-compose
 
 Two things here are easy to get wrong, and this project got both wrong at first:
 
-- **`piper-tts` is GPL-3.0-or-later**, not MIT. It runs as a separate service
-  rather than being imported, so this is aggregation rather than linking. Voice
-  files are licensed separately from the engine, and several carry no licence
-  field at all.
+- **`piper-tts` is GPL-3.0-or-later**, not MIT. It runs in its own container
+  (`infra/piper/`) rather than being imported, so this is aggregation rather
+  than linking. That container is the only GPL code in the project. The voice
+  itself is clean: `rhasspy/piper-voices` is MIT and the davefx dataset is CC0.
 - **MuseTalk's code is MIT but its distributed weights are CreativeML
   OpenRAIL-M.** Commercially usable, but Section II requires the use
   restrictions to be carried forward into customer terms as an enforceable

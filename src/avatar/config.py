@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     tts_voice: str = "es_ES-davefx-medium"
     voices_dir: str = "assets/voices"
 
+    # How Piper is reached.
+    #   "http"      separate service, the default. piper-tts is GPL-3.0-or-later,
+    #               and running it out of process is aggregation rather than
+    #               linking.
+    #   "inprocess" imports piper directly. Convenient locally, and a licensing
+    #               decision that must be made deliberately.
+    tts_backend: str = "http"
+    # 5050 rather than 5000: macOS binds 5000 for AirPlay Receiver.
+    tts_url: str = "http://localhost:5050"
+
     # Vision sampling. Both conditions must hold before a frame is sent: at
     # least vision_interval_s since the last upload, and enough visual change
     # since the last uploaded frame. The interval bounds cost; the threshold

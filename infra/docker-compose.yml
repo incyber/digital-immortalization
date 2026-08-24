@@ -28,6 +28,22 @@ services:
       interval: 5s
       retries: 10
 
+  # Piper runs here rather than inside the application process. piper-tts is
+  # GPL-3.0-or-later; importing it links a GPL library into proprietary code,
+  # while calling it over HTTP is aggregation. This is the only GPL code in
+  # the project and it is confined to this image.
+  #
+  # Port 5050 rather than 5000: macOS binds 5000 for AirPlay Receiver.
+  piper:
+    build: ./piper
+    environment:
+      PIPER_VOICE: es_ES-davefx-medium
+    ports:
+      - "5050:5050"
+    volumes:
+      - ../assets/voices:/voices:ro
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     ports:

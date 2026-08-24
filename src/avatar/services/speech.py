@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pipecat.services.piper.tts import PiperTTSService
+import aiohttp
+from pipecat.services.piper.tts import PiperHttpTTSService
 from pipecat.services.stt_service import STTService
 from pipecat.services.tts_service import TTSService
 
@@ -64,15 +65,34 @@ def build_tts(cfg: Settings) -> TTSService:
     process as the rest of this application, which is the case that licence is
     written to reach. The default backend therefore runs Piper as a separate
     HTTP service - aggregation rather than linking - and the in-process path
-    exists only for local convenience and must be selected deliberately. Voice
-    files are licensed separately from the engine and several, including
-    es_ES-davefx-medium, carry no licence field at all.
+    exists only for local convenience and must be selected deliberately.
+
+    Voice files are licensed separately from the engine. The .onnx.json carries
+    no licence field, which is not the same as having no licence: the
+    rhasspy/piper-voices repository is MIT, and es_ES-davefx-medium's model
+    card records its training dataset as CC0. Verified upstream, both clean.
 
     Chatterbox replaces Piper in sub-project 3, when the voice becomes a clone
     of a specific person rather than a stock voice. Both satisfy Pipecat's
     TTSService contract, so that swap touches this function and nothing else.
     """
-    return PiperTTSService(
-        settings=PiperTTSService.Settings(voice=cfg.tts_voice),
-        download_dir=Path(cfg.voices_dir),
-    )
+    if cfg.tts_backend == "http":
+        # aiohttp session is owned by the service and closed with it.
+        session = aiohttp.ClientSession()
+        return PiperHttpTTSService(
+            base_url=cfg.tts_url,
+            aiohttp_session=session,
+            settings=PiperHttpTTSService.Settings(voice=cfg.tts_voice),
+        )
+
+    if cfg.tts_backend == "inprocess":
+        # Imported here rather than at module scope so that the default path
+        # never loads the GPL library at all.
+        from pipecat.services.piper.tts import PiperTTSService
+
+        return PiperTTSService(
+            settings=PiperTTSService.Settings(voice=cfg.tts_voice),
+            download_dir=Path(cfg.voices_dir),
+        )
+
+    raise ValueError(f"unknown tts_backend {cfg.tts_backend!r}; expected 'http' or 'inprocess'")

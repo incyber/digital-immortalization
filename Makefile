@@ -8,9 +8,9 @@ install:                ## Resolve dependencies and install the package editable
 	$(UV) sync --extra dev
 	$(UV) pip install -e . --quiet
 
-infra-up:               ## Start LiveKit, Postgres and Redis
-	docker compose -f infra/docker-compose.yml up -d
-	@echo "LiveKit ws://localhost:7880  Postgres 5432  Redis 6379"
+infra-up:               ## Start LiveKit, Postgres, Redis and the Piper sidecar
+	docker compose -f infra/docker-compose.yml up -d --build
+	@echo "LiveKit ws://localhost:7880  Postgres 5432  Redis 6379  Piper 5050"
 
 infra-down:
 	docker compose -f infra/docker-compose.yml down

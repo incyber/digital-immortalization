@@ -100,8 +100,13 @@ speech.py` described it as MIT. That comment was wrong.
 Loading a GPL-3.0 library into the same process as proprietary application code
 is the case the licence is designed to reach. Running it as a separate service
 is aggregation rather than linking, which is the fix taken in the correctness
-plan. The Piper *voice* files are licensed separately from the engine, and
-`es_ES-davefx-medium.onnx.json` carries no licence field at all.
+plan: Piper now runs in its own container and is reached over HTTP, and the
+in-process path must be selected deliberately.
+
+The Piper *voice* files are licensed separately from the engine. The
+`.onnx.json` sidecar carries no licence field, but the `rhasspy/piper-voices`
+repository is MIT and `es_ES-davefx-medium`'s model card records a CC0 training
+dataset. Both verified upstream. Clean.
 
 ### The candidate baseline repository
 
