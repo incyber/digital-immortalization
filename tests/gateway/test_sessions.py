@@ -59,7 +59,7 @@ async def test_agent_is_dispatched_into_the_room(db, cfg, verified_avatar, owner
 
     dispatcher = NullDispatcher()
     out = await open_session(db, cfg, verified_avatar.id, owner.id, dispatcher)
-    assert dispatcher.calls == [(out["room"], verified_avatar.id, verified_avatar.profile_path)]
+    assert dispatcher.calls == [(out["room"], verified_avatar.id)]
 
 
 async def test_no_agent_is_dispatched_when_consent_is_refused(db, cfg, avatar, owner):

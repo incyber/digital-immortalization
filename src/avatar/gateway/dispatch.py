@@ -28,7 +28,6 @@ class AgentDispatcher(Protocol):
         self,
         room: str,
         avatar_id: str,
-        profile_path: str,
         consent_record_id: str | None = None,
         rights_holder: str | None = None,
     ) -> None: ...
@@ -45,7 +44,6 @@ class LocalProcessDispatcher:
         self,
         room: str,
         avatar_id: str,
-        profile_path: str,
         consent_record_id: str | None = None,
         rights_holder: str | None = None,
     ) -> None:
@@ -66,7 +64,7 @@ class LocalProcessDispatcher:
             sys.executable, "-m", "avatar.realtime.agent",
             "--room", room,
             "--token", token,
-            "--profile", profile_path,
+            "--avatar", avatar_id,
         ]
         if assets.exists():
             command += ["--assets", str(assets)]
@@ -101,8 +99,7 @@ class NullDispatcher:
         self,
         room: str,
         avatar_id: str,
-        profile_path: str,
         consent_record_id: str | None = None,
         rights_holder: str | None = None,
     ) -> None:
-        self.calls.append((room, avatar_id, profile_path))
+        self.calls.append((room, avatar_id))

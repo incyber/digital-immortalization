@@ -42,7 +42,7 @@ from avatar.marking.manifest import (
     SessionManifest,
     watermark_payload_for,
 )
-from avatar.persona import build_system_prompt, load_profile
+from avatar.persona import Persona, build_system_prompt, persona_from_avatar
 from avatar.realtime.video_publisher import LiveKitVideoPublisher
 from avatar.realtime.warmup import warm
 from avatar.renderer.base import RendererStage
@@ -84,10 +84,30 @@ def build_renderer(cfg: Settings, assets_path: str | None = None) -> RendererSta
     return VisemeRenderer(assets)
 
 
+async def load_persona(cfg: Settings, avatar_id: str) -> Persona:
+    """Read the character from the database.
+
+    The agent is a separate process, so it fetches rather than being handed a
+    file path. Nothing about the character lives on disk with the application.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from avatar.gateway.db import init_engine
+    from avatar.gateway.models import Avatar
+    from avatar.safety.crisis_lines import parse_attested
+
+    factory = async_sessionmaker(init_engine(cfg), expire_on_commit=False)
+    async with factory() as db:
+        avatar = await db.get(Avatar, avatar_id)
+        if avatar is None:
+            raise ValueError(f"no avatar {avatar_id}")
+        return persona_from_avatar(avatar, parse_attested(cfg.crisis_lines_verified))
+
+
 def build_pipeline(
     cfg: Settings,
     transport: LiveKitTransport,
-    profile: dict,
+    persona: Persona,
     stage: RendererStage,
     room_name: str = "unknown",
 ) -> tuple[Pipeline, PipelineTask, SceneState, dict]:
@@ -100,8 +120,9 @@ def build_pipeline(
     # out of quota, rather than leaving somebody mid-conversation.
     llm = FallbackLLMService(build_providers(cfg))
 
+    profile = persona.as_dict()
     context = LLMContext(
-        messages=[{"role": "system", "content": build_system_prompt(profile, scene)}]
+        messages=[{"role": "system", "content": build_system_prompt(persona, scene)}]
     )
     # Voice activity detection lives on the user aggregator in Pipecat 1.7,
     # not on transport params. LiveKitParams has no vad_analyzer field and
@@ -120,7 +141,7 @@ def build_pipeline(
         """
         messages = context.get_messages()
         if messages and messages[0].get("role") == "system":
-            messages[0]["content"] = build_system_prompt(profile, scene)
+            messages[0]["content"] = build_system_prompt(persona, scene)
             context.set_messages(messages)
             logger.info("scene observation injected into system prompt")
 
@@ -128,14 +149,14 @@ def build_pipeline(
         [
             transport.input(),
             VisionSampler(
-                scene, cfg, on_observation=refresh_system_prompt, locale=profile["locale"]
+                scene, cfg, on_observation=refresh_system_prompt, locale=persona.locale
             ),
             stt,
             CrisisProcessor(profile),
             aggregators.user(),
             llm,
             tts,
-            RendererProcessor(stage, avatar_id=profile["id"]),
+            RendererProcessor(stage, avatar_id=persona.avatar_id),
             # Publishes video directly: Pipecat's LiveKit transport implements
             # video input only. See video_publisher.py.
             # No watermark_payload here on purpose. WebRTC re-encodes every
@@ -170,13 +191,13 @@ def build_pipeline(
 async def run_agent(
     room: str,
     token: str,
-    profile_path: str,
+    avatar_id: str,
     assets_path: str | None,
     consent_record_id: str | None = None,
     rights_holder: str | None = None,
 ) -> None:
     cfg = get_settings()
-    profile = load_profile(profile_path)
+    persona = await load_persona(cfg, avatar_id)
     stage = build_renderer(cfg, assets_path)
 
     transport = LiveKitTransport(
@@ -197,7 +218,7 @@ async def run_agent(
         ),
     )
 
-    _, task, _, services = build_pipeline(cfg, transport, profile, stage, room_name=room)
+    _, task, _, services = build_pipeline(cfg, transport, persona, stage, room_name=room)
 
     @transport.event_handler("on_first_participant_joined")
     async def _on_join(transport, participant):
@@ -214,8 +235,8 @@ async def run_agent(
 
     manifest = SessionManifest(
         session_id=room,
-        avatar_id=profile["id"],
-        avatar_display_name=profile["display_name"],
+        avatar_id=persona.avatar_id,
+        avatar_display_name=persona.display_name,
         consent_record_id=consent_record_id or "unknown",
         rights_holder=rights_holder or "unknown",
         started_at=datetime.now(UTC).isoformat(),
@@ -258,7 +279,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Join a room and run the avatar pipeline")
     parser.add_argument("--room", required=True)
     parser.add_argument("--token", default=os.environ.get("LIVEKIT_TOKEN", ""))
-    parser.add_argument("--profile", default="src/avatar/profiles/colon.json")
+    parser.add_argument("--avatar", required=True, help="avatar id to embody")
     parser.add_argument("--assets", default=None)
     parser.add_argument("--consent-record", default=None)
     parser.add_argument("--rights-holder", default=None)
@@ -272,7 +293,7 @@ def main() -> None:
         run_agent(
             args.room,
             args.token,
-            args.profile,
+            args.avatar,
             args.assets,
             consent_record_id=args.consent_record,
             rights_holder=args.rights_holder,

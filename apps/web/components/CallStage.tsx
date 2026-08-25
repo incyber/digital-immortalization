@@ -17,7 +17,7 @@ import {
 import { Track } from "livekit-client";
 import "@livekit/components-styles";
 import { useEffect, useState } from "react";
-import type { SessionDetails } from "@/lib/api";
+import type { SessionDetails } from "@/lib/gateway";
 
 function AvatarVideo() {
   const tracks = useTracks([Track.Source.Camera], { onlySubscribed: true });

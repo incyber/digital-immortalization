@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Cristóbal Colón — live call",
+  title: "Avatar calls",
   description: "A live video call with a synthetic recreation.",
 };
 

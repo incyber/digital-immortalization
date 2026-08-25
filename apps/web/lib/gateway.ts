@@ -54,6 +54,32 @@ export type PhotoSet = {
   photos: PhotoVerdict[];
 };
 
+export type Country = {
+  code: string;
+  name: string;
+  locale: string;
+  crisis_line: string;
+};
+
+export type AvatarInput = {
+  display_name: string;
+  locale: string;
+  country: string;
+  biography: string;
+  voice_description: string;
+  boundaries: string;
+};
+
+export type Avatar = AvatarInput & {
+  id: string;
+  photo_set_id: string | null;
+  has_assets: boolean;
+  // Generated from the name, never supplied by the customer.
+  disclosure: string;
+  crisis_line: { name: string; number: string } | null;
+  callable: boolean;
+};
+
 export const api = {
   register: (email: string, password: string) =>
     request<{ id: string }>("/api/auth/register", {
@@ -74,6 +100,39 @@ export const api = {
   me: () => request<{ id: string }>("/api/me"),
 
   requirements: () => request<Requirements>("/api/photo-sets/requirements"),
+
+  countries: () => request<{ countries: Country[] }>("/api/countries"),
+
+  listAvatars: () => request<{ avatars: Avatar[] }>("/api/avatars"),
+
+  readAvatar: (id: string) => request<Avatar>(`/api/avatars/${id}`),
+
+  createAvatar: (input: AvatarInput) =>
+    request<Avatar>("/api/avatars", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+
+  updateAvatar: (id: string, input: AvatarInput) =>
+    request<Avatar>(`/api/avatars/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+
+  attachPhotoSet: (avatarId: string, photoSetId: string) =>
+    request<Avatar>(`/api/avatars/${avatarId}/photo-set/${photoSetId}`, { method: "POST" }),
+
+  recordConsent: (
+    avatarId: string,
+    body: { rights_holder_name: string; relationship_to_subject: string; jurisdiction: string },
+  ) =>
+    request<{ status: string }>(`/api/avatars/${avatarId}/consent`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 
   createPhotoSet: () => request<{ id: string }>("/api/photo-sets", { method: "POST" }),
 
@@ -99,3 +158,30 @@ export const api = {
   job: (id: string) =>
     request<{ id: string; status: string; error: string | null }>(`/api/training-jobs/${id}`),
 };
+
+export type SessionDetails = {
+  session_id: string;
+  room: string;
+  url: string;
+  token: string;
+  avatar_id: string;
+};
+
+export class ConsentRefused extends Error {}
+
+export async function openSession(avatarId: string): Promise<SessionDetails> {
+  const response = await fetch(`${GATEWAY}/api/sessions`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ avatar_id: avatarId }),
+  });
+
+  if (response.status === 403) {
+    // The avatar is theirs and real; what is missing is verified consent.
+    const body = await response.json().catch(() => ({ detail: "consent refused" }));
+    throw new ConsentRefused(body.detail);
+  }
+  if (!response.ok) throw new ApiError(`gateway returned ${response.status}`, response.status);
+  return response.json();
+}

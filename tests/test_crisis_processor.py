@@ -1,12 +1,26 @@
 """The guardrail must be structural: on a match the transcription is dropped,
 so nothing downstream - including the model - ever sees the utterance."""
+from dataclasses import dataclass
+
 from pipecat.frames.frames import TranscriptionFrame, TTSSpeakFrame
 from pipecat.processors.frame_processor import FrameDirection
 
-from avatar.persona import load_profile
+from avatar.persona import persona_from_avatar
 from avatar.safety.processor import CrisisProcessor
 
-PROFILE = load_profile("src/avatar/profiles/colon.json")
+
+@dataclass
+class FakeAvatar:
+    id: str = "av-1"
+    display_name: str = "Marguerite Chen"
+    locale: str = "es"
+    country: str = "ES"
+    biography: str = "Una violonchelista de Vancouver."
+    voice_description: str = ""
+    boundaries: str = ""
+
+
+PROFILE = persona_from_avatar(FakeAvatar(), frozenset({"ES"})).as_dict()
 
 
 def _wire(collected, on_event=None):

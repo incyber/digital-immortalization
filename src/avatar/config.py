@@ -104,6 +104,13 @@ class Settings(BaseSettings):
     # rejected by assert_production_ready; set SESSION_SECRET in deployment.
     session_secret: str = "dev-session-secret-not-for-production"
 
+    # Comma-separated ISO country codes whose crisis line the operator has
+    # personally checked against the published source. Empty means no country
+    # is served, which is the correct default: the guardrail speaks a real
+    # phone number to somebody in distress, and a wrong one is worse than
+    # nothing. See safety/crisis_lines.py.
+    crisis_lines_verified: str = ""
+
     # Object storage. "s3" covers AWS S3, Cloudflare R2, Backblaze and MinIO -
     # set s3_endpoint_url for anything that is not AWS.
     storage_backend: str = "local"

@@ -26,6 +26,7 @@ from avatar.gateway.auth import (
 from avatar.gateway.consent import ConsentError
 from avatar.gateway.db import create_all, get_db
 from avatar.gateway.dispatch import LocalProcessDispatcher
+from avatar.gateway.routes_avatars import build_router as build_avatar_router
 from avatar.gateway.routes_ingest import build_router
 from avatar.gateway.sessions import open_session
 from avatar.gateway.tenancy import TenantError
@@ -160,6 +161,7 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
             # the reason it cannot be called is permission they can act on.
             raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    app.include_router(build_avatar_router(settings, current_user, get_db))
     app.include_router(
         build_router(settings, current_user, get_db, store, runner)
     )

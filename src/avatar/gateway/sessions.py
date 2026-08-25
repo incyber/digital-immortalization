@@ -79,7 +79,9 @@ async def open_session(
     somebody else entirely. Nothing is written, no token exists, and no agent
     is dispatched unless both pass.
     """
-    avatar = await assert_owned(db, avatar_id, owner_id)
+    # Called for the check, not the row: the agent loads the character
+    # itself from the database.
+    await assert_owned(db, avatar_id, owner_id)
     consent = await assert_consented(db, avatar_id)
 
     room = f"call-{uuid.uuid4().hex[:12]}"
@@ -91,7 +93,6 @@ async def open_session(
         await dispatcher.dispatch(
             room,
             avatar_id,
-            avatar.profile_path,
             consent_record_id=consent.id,
             rights_holder=consent.rights_holder_name,
         )

@@ -53,16 +53,38 @@ class User(Base):
 
 
 class Avatar(Base):
-    """One recreated person."""
+    """One recreated person, described entirely by the customer.
+
+    Everything the persona needs lives here rather than in a file shipped with
+    the application. There is no built-in character: an account with no avatars
+    can do nothing until it creates one, which is the correct state for a
+    product whose entire subject matter is supplied by its users.
+
+    Two fields are deliberately not customer-editable and so are not columns:
+    the synthetic-media disclosure, which is generated from display_name so it
+    cannot be weakened or removed, and the crisis line, which is resolved from
+    a verified registry by country rather than typed.
+    """
 
     __tablename__ = "avatars"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+
+    # Who this is. The customer's words, used verbatim in the prompt.
     display_name: Mapped[str] = mapped_column(String(255))
     locale: Mapped[str] = mapped_column(String(8), default="en")
-    profile_path: Mapped[str] = mapped_column(String(512))
-    assets_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Country decides which crisis line the guardrail speaks.
+    country: Mapped[str] = mapped_column(String(2), default="US")
+    biography: Mapped[str] = mapped_column(Text, default="")
+    voice_description: Mapped[str] = mapped_column(Text, default="")
+    # Optional. What the recreation should decline to do or claim.
+    boundaries: Mapped[str] = mapped_column(Text, default="")
+
+    # Set once the photo set has trained and assets have been built.
+    photo_set_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    assets_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     owner: Mapped[User] = relationship(back_populates="avatars")

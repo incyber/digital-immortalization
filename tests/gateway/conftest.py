@@ -33,7 +33,12 @@ async def owner(db: AsyncSession):
 
 @pytest_asyncio.fixture
 async def avatar(db: AsyncSession, owner):
-    a = Avatar(owner_id=owner.id, display_name="Test", profile_path="p.json")
+    a = Avatar(
+        owner_id=owner.id,
+        display_name="Marguerite Chen",
+        country="US",
+        biography="A cellist from Vancouver.",
+    )
     db.add(a)
     await db.flush()
     db.add(
@@ -51,7 +56,12 @@ async def avatar(db: AsyncSession, owner):
 
 @pytest_asyncio.fixture
 async def avatar_without_consent(db: AsyncSession, owner):
-    a = Avatar(owner_id=owner.id, display_name="Orphan", profile_path="p.json")
+    a = Avatar(
+        owner_id=owner.id,
+        display_name="Tomás Duarte",
+        country="US",
+        biography="A bookbinder from Porto.",
+    )
     db.add(a)
     await db.commit()
     return a

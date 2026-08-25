@@ -1,0 +1,189 @@
+"""Avatar creation. Every character is the customer's; none ship with the app."""
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+
+from avatar.gateway.app import create_app
+from avatar.gateway.models import Base
+
+AVATAR = {
+    "display_name": "Marguerite Chen",
+    "locale": "en",
+    "country": "US",
+    "biography": "A cellist from Vancouver who taught for thirty years.",
+    "voice_description": "Dry, unhurried, fond of understatement.",
+    "boundaries": "",
+}
+
+
+@pytest_asyncio.fixture
+async def client(cfg, tmp_path):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    import avatar.gateway.db as db_module
+
+    cfg.database_url = f"sqlite+aiosqlite:///{tmp_path}/api.db"
+    cfg.storage_root = str(tmp_path / "blobs")
+    # The operator has attested these two countries.
+    cfg.crisis_lines_verified = "US,ES"
+
+    engine = create_async_engine(cfg.database_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    db_module._engine = engine
+    db_module._factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app(cfg)), base_url="http://test"
+    ) as c:
+        yield c
+    await engine.dispose()
+
+
+async def sign_in(client, email="a@example.com"):
+    await client.post(
+        "/api/auth/register", json={"email": email, "password": "a-long-enough-password"}
+    )
+
+
+async def test_a_new_account_has_no_avatars(client):
+    # There is no built-in character to fall back on.
+    await sign_in(client)
+    assert (await client.get("/api/avatars")).json()["avatars"] == []
+
+
+async def test_creating_an_avatar(client):
+    await sign_in(client)
+    response = await client.post("/api/avatars", json=AVATAR)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["display_name"] == "Marguerite Chen"
+    assert body["id"]
+
+
+async def test_the_disclosure_names_the_customers_person(client):
+    await sign_in(client)
+    body = (await client.post("/api/avatars", json=AVATAR)).json()
+    assert "Marguerite Chen" in body["disclosure"]
+    assert "synthetic recreation" in body["disclosure"]
+
+
+async def test_the_customer_cannot_supply_a_disclosure(client):
+    # Extra keys are ignored by the model, so an attempt to override the
+    # disclosure silently does nothing rather than taking effect.
+    await sign_in(client)
+    body = (
+        await client.post(
+            "/api/avatars", json={**AVATAR, "disclosure": "This is definitely a real person"}
+        )
+    ).json()
+    assert "definitely a real person" not in body["disclosure"]
+
+
+async def test_the_customer_cannot_supply_a_crisis_number(client):
+    await sign_in(client)
+    body = (
+        await client.post(
+            "/api/avatars", json={**AVATAR, "crisis_line_number": "555-0100"}
+        )
+    ).json()
+    assert body["crisis_line"]["number"] == "988"
+
+
+async def test_an_avatar_without_a_biography_is_refused(client):
+    await sign_in(client)
+    response = await client.post("/api/avatars", json={**AVATAR, "biography": ""})
+    assert response.status_code == 422
+
+
+async def test_an_unattested_country_is_refused(client):
+    await sign_in(client)
+    response = await client.post("/api/avatars", json={**AVATAR, "country": "MX"})
+    assert response.status_code == 400
+    assert "MX" in response.json()["detail"] or "Mexico" in response.json()["detail"]
+
+
+async def test_countries_lists_only_what_the_operator_attested(client):
+    await sign_in(client)
+    codes = {c["code"] for c in (await client.get("/api/countries")).json()["countries"]}
+    assert codes == {"US", "ES"}
+
+
+async def test_avatars_are_private_to_their_owner(client):
+    await sign_in(client, "owner@example.com")
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+
+    await client.post("/api/auth/logout")
+    await sign_in(client, "stranger@example.com")
+
+    assert (await client.get(f"/api/avatars/{avatar_id}")).status_code == 404
+    assert (await client.get("/api/avatars")).json()["avatars"] == []
+
+
+async def test_another_tenant_cannot_edit_an_avatar(client):
+    await sign_in(client, "owner@example.com")
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+
+    await client.post("/api/auth/logout")
+    await sign_in(client, "stranger@example.com")
+
+    response = await client.patch(
+        f"/api/avatars/{avatar_id}", json={**AVATAR, "display_name": "Hijacked"}
+    )
+    assert response.status_code == 404
+
+
+async def test_an_avatar_without_assets_is_not_callable(client):
+    await sign_in(client)
+    body = (await client.post("/api/avatars", json=AVATAR)).json()
+    assert body["callable"] is False
+
+
+async def test_editing_an_avatar_updates_the_disclosure(client):
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    body = (
+        await client.patch(
+            f"/api/avatars/{avatar_id}", json={**AVATAR, "display_name": "Tomás Duarte"}
+        )
+    ).json()
+    assert "Tomás Duarte" in body["disclosure"]
+
+
+async def test_consent_is_recorded_as_pending_not_verified(client):
+    # A self-service route to "verified" would make the gate decorative.
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/consent",
+        json={
+            "rights_holder_name": "Ana Chen",
+            "relationship_to_subject": "daughter",
+            "jurisdiction": "US-WA",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["status"] == "pending"
+
+
+async def test_a_pending_consent_still_blocks_a_call(client):
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    await client.post(
+        f"/api/avatars/{avatar_id}/consent",
+        json={
+            "rights_holder_name": "Ana Chen",
+            "relationship_to_subject": "daughter",
+            "jurisdiction": "US-WA",
+        },
+    )
+    response = await client.post("/api/sessions", json={"avatar_id": avatar_id})
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("country", ["us", "Us", "US"])
+async def test_country_is_case_insensitive(client, country):
+    await sign_in(client)
+    response = await client.post("/api/avatars", json={**AVATAR, "country": country})
+    assert response.status_code == 201

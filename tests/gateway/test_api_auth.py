@@ -89,7 +89,12 @@ async def test_another_tenants_avatar_is_a_404_not_a_403(client):
     await client.post("/api/auth/register", json=CREDS)
     me = (await client.get("/api/me")).json()
     async with db_module._factory() as db:
-        a = Avatar(owner_id=me["id"], display_name="Theirs", profile_path="p.json")
+        a = Avatar(
+            owner_id=me["id"],
+            display_name="Theirs",
+            country="US",
+            biography="Someone else's person.",
+        )
         db.add(a)
         await db.flush()
         db.add(

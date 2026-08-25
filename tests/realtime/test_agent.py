@@ -3,7 +3,6 @@ tests; these pin the wiring decisions that are easy to get silently wrong."""
 import pytest
 
 from avatar.config import Settings
-from avatar.persona import load_profile
 from avatar.realtime.agent import build_renderer
 
 
@@ -50,9 +49,13 @@ def test_pipeline_places_the_renderer_after_tts():
     assert src.index("RendererProcessor(stage") < src.index("transport.output()")
 
 
-def test_shipped_profile_is_usable_by_the_agent():
-    profile = load_profile("src/avatar/profiles/colon.json")
-    assert profile["id"] and profile["crisis_line_number"]
+def test_no_character_is_shipped_with_the_application():
+    # The agent loads whoever the customer described; nothing is bundled.
+    from pathlib import Path
+
+    src = Path("src/avatar/realtime/agent.py").read_text()
+    assert "load_persona" in src
+    assert "profiles/" not in src
 
 
 def test_worker_is_awaited_before_the_runner_starts():
