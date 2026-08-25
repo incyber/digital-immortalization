@@ -26,8 +26,11 @@ from avatar.gateway.auth import (
 from avatar.gateway.consent import ConsentError
 from avatar.gateway.db import create_all, get_db
 from avatar.gateway.dispatch import LocalProcessDispatcher
+from avatar.gateway.routes_ingest import build_router
 from avatar.gateway.sessions import open_session
 from avatar.gateway.tenancy import TenantError
+from avatar.storage.factory import build_store
+from avatar.training.factory import build_runner
 
 
 class SessionRequest(BaseModel):
@@ -50,6 +53,8 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
     settings = cfg or get_settings()
 
     dispatcher = LocalProcessDispatcher(settings)
+    store = build_store(settings)
+    runner = build_runner(settings, store)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -154,6 +159,10 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
             # 403 rather than 404 here: the avatar is theirs, it is real, and
             # the reason it cannot be called is permission they can act on.
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    app.include_router(
+        build_router(settings, current_user, get_db, store, runner)
+    )
 
     return app
 

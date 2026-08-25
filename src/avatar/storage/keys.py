@@ -19,8 +19,10 @@ import re
 # legitimate needs anything outside this.
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
-# Filenames may carry a single dot for the extension and nothing else.
-_SAFE_FILENAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}\.[a-zA-Z0-9]{1,10}$")
+# Filenames may carry a single dot for the extension and nothing else. The
+# extension allowance reaches 16 because real artefacts here include
+# ".safetensors".
+_SAFE_FILENAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}\.[a-zA-Z0-9]{1,16}$")
 
 # Trailing slash is load-bearing: without it "tenants/abc" prefix-matches
 # "tenants/abcd/secret.jpg" and a list operation crosses tenants.

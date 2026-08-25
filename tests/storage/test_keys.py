@@ -62,3 +62,12 @@ def test_photo_key_separates_photo_sets():
     a = photo_key("tenant-a", "set-1", "p.jpg")
     b = photo_key("tenant-a", "set-2", "p.jpg")
     assert a != b
+
+
+def test_real_artefact_extensions_are_accepted():
+    # Model weights are ".safetensors", which is longer than a naive
+    # extension limit allows.
+    from avatar.storage.keys import asset_key
+
+    for name in ("identity.safetensors", "idle.mp4", "plates.npz", "assets.json"):
+        assert asset_key("tenant-a", "avatar-1", name).endswith(name)

@@ -87,6 +87,24 @@ class Settings(BaseSettings):
     # rejected by assert_production_ready; set SESSION_SECRET in deployment.
     session_secret: str = "dev-session-secret-not-for-production"
 
+    # Object storage. "s3" covers AWS S3, Cloudflare R2, Backblaze and MinIO -
+    # set s3_endpoint_url for anything that is not AWS.
+    storage_backend: str = "local"
+    storage_root: str = "assets/blobs"
+    s3_bucket: str = ""
+    s3_region: str = "auto"
+    s3_endpoint_url: str = ""
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+
+    # Identity training. "local" fakes a run so the flow can be built without
+    # a GPU account; "replicate" is pay-per-run hosted training.
+    training_backend: str = "local"
+    replicate_api_token: str = ""
+    # Pinned by version rather than name: an upstream change must not silently
+    # alter what a customer's likeness was trained with.
+    replicate_trainer_version: str = ""
+
     # Session cookies must be Secure in deployment. False locally because
     # http://localhost is not a secure origin and the cookie would be dropped.
     cookies_secure: bool = False
