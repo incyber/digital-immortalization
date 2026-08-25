@@ -44,6 +44,15 @@ services:
       - ../assets/voices:/voices:ro
     restart: unless-stopped
 
+  # Face geometry. One licence-clean detector for the whole system, replacing
+  # the non-commercial ones both renderers ship. CPU only, so it never
+  # competes with the GPU the renderers need.
+  facegeom:
+    build: ./facegeom
+    ports:
+      - "7001:7001"
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     ports:

@@ -100,6 +100,9 @@ class Settings(BaseSettings):
 
     assets_dir: str = "assets"
 
+    # Face geometry service. See vision/faceclient.py for why it is a service.
+    face_service_url: str = "http://localhost:7001"
+
     # Signs session cookies. The default is obviously not a secret and is
     # rejected by assert_production_ready; set SESSION_SECRET in deployment.
     session_secret: str = "dev-session-secret-not-for-production"

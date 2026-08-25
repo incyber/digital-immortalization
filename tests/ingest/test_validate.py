@@ -260,3 +260,18 @@ def test_every_requirement_is_met_for_a_good_set():
     result = inspect_set(photos)
     assert all(r.met for r in result.requirements)
     assert result.acceptable
+
+
+def test_opencv_still_provides_the_cascade():
+    """Two OpenCV distributions are installed and import order decides which wins.
+
+    mediapipe requires opencv-contrib-python 5.x; this project pins
+    opencv-python-headless below 5 because plain 5.x dropped the bundled Haar
+    API. Contrib 5.x still has it, so the combination works - but silently,
+    and a future resolution could pick the one that does not.
+    """
+    assert hasattr(cv2, "CascadeClassifier")
+    classifier = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    assert not classifier.empty(), "the bundled frontal cascade must load"
