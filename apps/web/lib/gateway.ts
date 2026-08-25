@@ -32,7 +32,8 @@ export type Requirements = {
   minimum: number;
   recommended_min: number;
   recommended_max: number;
-  minimum_half_body: number;
+  half_body_threshold: number;
+  note: string;
   shots: { label: string; count: string }[];
   rules: string[];
 };
@@ -52,6 +53,8 @@ export type Requirement = {
   target: number;
   met: boolean;
   hint: string;
+  // Informational requirements report progress without gating the build.
+  blocking: boolean;
 };
 
 export type PhotoSet = {
@@ -59,6 +62,8 @@ export type PhotoSet = {
   status: string;
   usable_count: number;
   half_body_count: number;
+  framing: "head" | "half_body";
+  framing_label: string;
   problems: string[];
   requirements: Requirement[];
   photos: PhotoVerdict[];

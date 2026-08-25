@@ -6,8 +6,9 @@ import numpy as np
 from avatar.ingest.validate import (
     MAX_ACCEPTED,
     MIN_FACE_SHARPNESS,
-    MIN_HALF_BODY,
+    MIN_FOR_HALF_BODY,
     MIN_USABLE,
+    Framing,
     PhotoVerdict,
     Reason,
     Verdict,
@@ -152,17 +153,38 @@ def test_too_many_images_is_refused():
     assert any("overfits" in p for p in result.problems)
 
 
-def test_a_set_of_only_head_shots_is_refused():
-    # Twenty-five perfectly good portraits that cannot produce a half-body
-    # avatar. This is the failure mode most datasets have.
+def test_a_set_of_only_head_shots_is_accepted_and_framed_as_a_head():
+    """Close portraits are what families actually have.
+
+    Requiring twenty torso photographs of somebody who has died is not a
+    requirement anyone can meet. The framing follows the photographs instead.
+    """
     result = inspect_set([ok(f"{i}.jpg", 0.5) for i in range(25)])
-    assert not result.acceptable
-    assert any("floating head" in p for p in result.problems)
+    assert result.acceptable, result.problems
+    assert result.framing is Framing.HEAD
+
+
+def test_enough_torso_shots_widen_the_framing():
+    photos = [ok(f"h{i}.jpg", 0.5) for i in range(20)]
+    photos += [ok(f"b{i}.jpg", 0.22) for i in range(MIN_FOR_HALF_BODY)]
+    result = inspect_set(photos)
+    assert result.acceptable
+    assert result.framing is Framing.HALF_BODY
+
+
+def test_torso_coverage_never_blocks_the_build():
+    # It changes what the avatar looks like; it does not decide whether one
+    # can exist at all.
+    result = inspect_set([ok(f"{i}.jpg", 0.5) for i in range(20)])
+    half = next(r for r in result.requirements if r.key == "half_body")
+    assert half.met is False
+    assert half.blocking is False
+    assert result.acceptable
 
 
 def test_a_well_covered_set_is_accepted():
     photos = [ok(f"head-{i}.jpg", 0.5) for i in range(18)]
-    photos += [ok(f"body-{i}.jpg", 0.22) for i in range(MIN_HALF_BODY + 2)]
+    photos += [ok(f"body-{i}.jpg", 0.22) for i in range(MIN_FOR_HALF_BODY + 2)]
     result = inspect_set(photos)
     assert result.acceptable, result.problems
 
@@ -170,7 +192,7 @@ def test_a_well_covered_set_is_accepted():
 def test_rejected_images_do_not_count_towards_the_total():
     # Twelve good images and twenty rejects. Someone uploading thirty-two
     # files sees "32" and expects to pass; the count that matters is 12.
-    good = [ok(f"g{i}.jpg", 0.22) for i in range(MIN_HALF_BODY)]
+    good = [ok(f"g{i}.jpg", 0.22) for i in range(5)]
     good += [ok(f"h{i}.jpg", 0.5) for i in range(7)]
     bad = [PhotoVerdict(f"b{i}.jpg", Verdict.REJECTED, [Reason.BLURRY]) for i in range(20)]
 
@@ -184,8 +206,8 @@ def test_rejected_images_do_not_count_towards_the_total():
 def test_exactly_the_minimum_is_accepted():
     # The boundary itself must pass, or the message telling customers they
     # need 15 is a lie.
-    photos = [ok(f"b{i}.jpg", 0.22) for i in range(MIN_HALF_BODY)]
-    photos += [ok(f"h{i}.jpg", 0.5) for i in range(MIN_USABLE - MIN_HALF_BODY)]
+    photos = [ok(f"b{i}.jpg", 0.22) for i in range(MIN_FOR_HALF_BODY)]
+    photos += [ok(f"h{i}.jpg", 0.5) for i in range(MIN_USABLE - MIN_FOR_HALF_BODY)]
     result = inspect_set(photos)
     assert result.acceptable, result.problems
 
@@ -205,21 +227,18 @@ def test_requirements_report_progress_not_just_failure():
 
     assert by_key["half_body"].met is False
     assert by_key["half_body"].current == 0
-    assert by_key["half_body"].target == MIN_HALF_BODY
-    assert "further back" in by_key["half_body"].hint
 
 
-def test_the_blocking_problem_names_both_numbers():
-    # "only 2 of 24" tells somebody what to do; "not enough" does not.
-    photos = [ok(f"h{i}.jpg", 0.42) for i in range(22)]
-    photos += [ok(f"b{i}.jpg", 0.22) for i in range(2)]
-    result = inspect_set(photos)
-    assert any("2 of 24" in p for p in result.problems)
+
+def test_a_short_set_names_both_numbers():
+    # "only 3 usable" tells somebody what to do; "not enough" does not.
+    result = inspect_set([ok(f"h{i}.jpg", 0.42) for i in range(3)])
+    assert any("only 3 usable" in p for p in result.problems)
 
 
 def test_every_requirement_is_met_for_a_good_set():
     photos = [ok(f"h{i}.jpg", 0.42) for i in range(18)]
-    photos += [ok(f"b{i}.jpg", 0.22) for i in range(MIN_HALF_BODY)]
+    photos += [ok(f"b{i}.jpg", 0.22) for i in range(MIN_FOR_HALF_BODY)]
     result = inspect_set(photos)
     assert all(r.met for r in result.requirements)
     assert result.acceptable

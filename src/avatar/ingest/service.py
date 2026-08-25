@@ -191,6 +191,7 @@ async def evaluate_set(db: AsyncSession, photo_set_id: str, owner_id: str) -> Ph
     )
     photo_set.usable_count = len(result.usable)
     photo_set.half_body_count = result.half_body_count
+    photo_set.framing = result.framing.value
     photo_set.problems = json.dumps(result.problems) if result.problems else None
     photo_set.status = PhotoSetStatus.READY if result.acceptable else PhotoSetStatus.REJECTED
     await db.commit()
@@ -236,6 +237,10 @@ def describe(photo_set: PhotoSet, photos: list[Photo]) -> dict:
         "status": photo_set.status.value,
         "usable_count": photo_set.usable_count,
         "half_body_count": photo_set.half_body_count,
+        "framing": photo_set.framing,
+        "framing_label": (
+            "head and torso" if photo_set.framing == "half_body" else "head and shoulders"
+        ),
         "problems": json.loads(photo_set.problems) if photo_set.problems else [],
         "requirements": (
             json.loads(photo_set.requirements_json) if photo_set.requirements_json else []

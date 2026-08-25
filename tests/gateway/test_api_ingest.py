@@ -53,8 +53,10 @@ async def test_requirements_are_served_not_hardcoded_in_the_frontend(client):
     body = (await client.get("/api/photo-sets/requirements")).json()
     assert body["recommended_min"] == 20
     assert body["recommended_max"] == 30
-    assert body["minimum_half_body"] >= 5
-    assert any("Half body" in s["label"] for s in body["shots"])
+    # Torso shots are offered, not demanded: they widen the framing.
+    assert body["half_body_threshold"] == 3
+    assert any("optional" in s["label"].lower() for s in body["shots"])
+    assert "close portraits" in body["note"] or "otherwise" in body["note"]
 
 
 async def test_creating_a_set_requires_sign_in(client):
@@ -135,3 +137,77 @@ async def test_another_tenants_training_job_is_a_404(client):
     await sign_in(client, "stranger@example.com")
 
     assert (await client.get(f"/api/training-jobs/{set_id}")).status_code == 404
+
+
+async def test_a_set_of_close_portraits_is_accepted_and_framed_as_a_head(client):
+    """What a family actually has: portraits, no torso shots.
+
+    Rejecting this was the bug. The framing adapts instead.
+    """
+    from sqlalchemy import select
+
+    import avatar.gateway.db as db_module
+    from avatar.gateway.models import Photo, PhotoSet
+
+    await sign_in(client)
+    set_id = (await client.post("/api/photo-sets")).json()["id"]
+
+    # Written directly: generating twenty images the cascade detects is slow,
+    # and what is under test is the set-level rule, not detection.
+    async with db_module._factory() as db:
+        photo_set = (
+            await db.execute(select(PhotoSet).where(PhotoSet.id == set_id))
+        ).scalar_one()
+        for i in range(20):
+            db.add(
+                Photo(
+                    photo_set_id=set_id,
+                    owner_id=photo_set.owner_id,
+                    blob_key=f"tenants/{photo_set.owner_id}/photos/{set_id}/p{i}.jpg",
+                    filename=f"p{i}.jpg",
+                    content_type="image/jpeg",
+                    size_bytes=1,
+                    accepted=True,
+                    face_height_fraction=0.45,   # close portrait, no torso
+                )
+            )
+        await db.commit()
+
+    body = (await client.post(f"/api/photo-sets/{set_id}/evaluate")).json()
+    assert body["status"] == "ready", body["problems"]
+    assert body["framing"] == "head"
+    assert body["framing_label"] == "head and shoulders"
+
+
+async def test_torso_shots_widen_the_framing(client):
+    from sqlalchemy import select
+
+    import avatar.gateway.db as db_module
+    from avatar.gateway.models import Photo, PhotoSet
+
+    await sign_in(client)
+    set_id = (await client.post("/api/photo-sets")).json()["id"]
+
+    async with db_module._factory() as db:
+        photo_set = (
+            await db.execute(select(PhotoSet).where(PhotoSet.id == set_id))
+        ).scalar_one()
+        fractions = [0.45] * 17 + [0.24] * 3
+        for i, fraction in enumerate(fractions):
+            db.add(
+                Photo(
+                    photo_set_id=set_id,
+                    owner_id=photo_set.owner_id,
+                    blob_key=f"tenants/{photo_set.owner_id}/photos/{set_id}/p{i}.jpg",
+                    filename=f"p{i}.jpg",
+                    content_type="image/jpeg",
+                    size_bytes=1,
+                    accepted=True,
+                    face_height_fraction=fraction,
+                )
+            )
+        await db.commit()
+
+    body = (await client.post(f"/api/photo-sets/{set_id}/evaluate")).json()
+    assert body["framing"] == "half_body"
+    assert body["framing_label"] == "head and torso"

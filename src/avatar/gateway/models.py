@@ -84,6 +84,7 @@ class Avatar(Base):
     # Set once the photo set has trained and assets have been built.
     photo_set_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     assets_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    framing: Mapped[str] = mapped_column(String(16), default="head")
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -155,6 +156,9 @@ class PhotoSet(Base):
     )
     usable_count: Mapped[int] = mapped_column(Integer, default=0)
     half_body_count: Mapped[int] = mapped_column(Integer, default=0)
+    # "head" or "half_body", decided by what the photographs show rather than
+    # demanded of the customer. See ingest/validate.py.
+    framing: Mapped[str] = mapped_column(String(16), default="head")
     problems: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Per-requirement progress, so the upload page can show which condition is
     # unmet and by how much rather than only a pass or fail.

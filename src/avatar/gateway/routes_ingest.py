@@ -25,7 +25,7 @@ from avatar.ingest.service import (
     revalidate_set,
 )
 from avatar.ingest.validate import (
-    MIN_HALF_BODY,
+    MIN_FOR_HALF_BODY,
     MIN_USABLE,
     RECOMMENDED_MAX,
     RECOMMENDED_MIN,
@@ -55,21 +55,29 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
             "minimum": MIN_USABLE,
             "recommended_min": RECOMMENDED_MIN,
             "recommended_max": RECOMMENDED_MAX,
-            "minimum_half_body": MIN_HALF_BODY,
+            "half_body_threshold": MIN_FOR_HALF_BODY,
             "shots": [
                 {"label": "Head-on, neutral, looking at the camera", "count": "4-5"},
                 {"label": "Three-quarter turn, both sides", "count": "4-6"},
                 {"label": "Profile, both sides", "count": "2"},
-                {"label": "Half body, shoulders and chest in frame", "count": "6-8"},
                 {"label": "Talking or smiling, mouth open", "count": "4-6"},
+                {
+                    "label": "Chest and shoulders in frame (optional)",
+                    "count": "3+",
+                },
             ],
             "rules": [
-                "At least 1024 pixels on the short edge",
-                "Sharp, not blurred or heavily zoomed",
+                "A phone photograph is fine; anything above 512 pixels works",
+                "The face in focus - a blurred background is not a problem",
                 "One person per photograph",
                 "No sunglasses or heavy shadow across the face",
                 "Different days, outfits and lighting where possible",
             ],
+            "note": (
+                "Use whatever photographs exist. With three or more showing the "
+                "chest, the avatar includes the torso; otherwise it is framed at "
+                "head and shoulders."
+            ),
         }
 
     @router.post("/api/photo-sets", status_code=201)

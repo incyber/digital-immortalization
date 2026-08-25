@@ -57,14 +57,39 @@ MIN_FACE_SHARPNESS = 60.0
 # three in four photographs that contained one person.
 SECOND_FACE_RATIO = 0.40
 
-# Half-body coverage is the difference between a talking head and the
-# neck-and-torso avatar this product promises. Enforced as a minimum.
-MIN_HALF_BODY = 5
+# Torso coverage decides how the avatar is framed, not whether it can be built.
+#
+# Demanding twenty half-body photographs of somebody who has died is not a
+# requirement a family can meet: what exists is what exists, and it is usually
+# close portraits. So the framing adapts to the material instead. With enough
+# pictures showing the shoulders and chest, the avatar is head, neck and torso;
+# without them it is head and shoulders, cropped where the evidence stops.
+#
+# Three is a floor for the wider framing rather than a gate on the product:
+# below it there is not enough of the torso seen from enough angles to
+# reconstruct one, and inventing it would put clothing on somebody that they
+# never wore.
+MIN_FOR_HALF_BODY = 3
 
 
 class Verdict(str, Enum):
     OK = "ok"
     REJECTED = "rejected"
+
+
+class Framing(str, Enum):
+    """How much of the person the avatar will show.
+
+    Decided by what the photographs contain. Neither is a failure; they are
+    different products, and the customer is told which one they are getting.
+    """
+
+    HEAD = "head"            # head, neck, shoulders
+    HALF_BODY = "half_body"  # head, neck, shoulders, chest
+
+    @property
+    def label(self) -> str:
+        return "head and shoulders" if self is Framing.HEAD else "head and torso"
 
 
 class Reason(str, Enum):
@@ -110,6 +135,10 @@ class Requirement:
     target: int
     met: bool
     hint: str = ""
+    # Informational requirements report progress without gating the build.
+    # Torso coverage is the case that forced the distinction: it changes what
+    # the avatar looks like, it does not decide whether one can exist.
+    blocking: bool = True
 
 
 @dataclass
@@ -127,6 +156,15 @@ class SetVerdict:
     @property
     def half_body_count(self) -> int:
         return sum(1 for p in self.usable if p.is_half_body)
+
+    @property
+    def framing(self) -> Framing:
+        """What can be built from these photographs."""
+        return (
+            Framing.HALF_BODY
+            if self.half_body_count >= MIN_FOR_HALF_BODY
+            else Framing.HEAD
+        )
 
     @property
     def acceptable(self) -> bool:
@@ -254,13 +292,14 @@ def inspect_set(photos: list[PhotoVerdict]) -> SetVerdict:
         ),
         Requirement(
             key="half_body",
-            label="Showing head and shoulders or more",
+            label="Showing the chest and shoulders",
             current=half_body,
-            target=MIN_HALF_BODY,
-            met=half_body >= MIN_HALF_BODY,
+            target=MIN_FOR_HALF_BODY,
+            met=half_body >= MIN_FOR_HALF_BODY,
+            blocking=False,
             hint=(
-                "Stand further back so the shoulders and chest are in frame. "
-                "Close-up portraits alone produce a floating head."
+                "Optional. With three or more the avatar includes the torso; "
+                "otherwise it is framed at head and shoulders."
             ),
         ),
         Requirement(
@@ -285,11 +324,7 @@ def inspect_set(photos: list[PhotoVerdict]) -> SetVerdict:
             "past that the model overfits rather than improving"
         )
 
-    if usable and half_body < MIN_HALF_BODY:
-        result.problems.append(
-            f"only {half_body} of {len(usable)} images show head and shoulders or "
-            f"more; at least {MIN_HALF_BODY} are needed, or the result is a "
-            "floating head rather than a half-body avatar"
-        )
+    # Torso coverage deliberately adds no problem. It changes the framing,
+    # which the customer is told about, rather than blocking the build.
 
     return result

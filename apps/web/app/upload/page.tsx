@@ -21,7 +21,7 @@ const REASON_TEXT: Record<string, string> = {
   "resolution below 512px on the short edge": "Too small",
   "no face detected": "No face found",
   "more than one face in frame": "More than one person",
-  "too blurry or heavily upscaled": "Blurry",
+  "the face is not sharp enough": "Face not sharp",
   "face occupies too little of the frame": "Face too small in frame",
 };
 
@@ -130,7 +130,9 @@ export default function Upload() {
   const accepted = set?.photos.filter((p) => p.accepted) ?? [];
   const halfBody = accepted.filter((p) => p.half_body).length;
   const ready = set?.status === "ready";
-  const unmet = (set?.requirements ?? []).filter((r) => !r.met);
+  // Only blocking requirements can stop the build. Torso coverage changes
+  // what the avatar looks like, not whether one can be made.
+  const unmet = (set?.requirements ?? []).filter((r) => !r.met && r.blocking);
   const blockedBecause =
     set && !ready
       ? unmet.length > 0
@@ -146,8 +148,8 @@ export default function Upload() {
           {requirements && (
             <p className="mt-1.5 text-sm text-neutral-400">
               {requirements.recommended_min}–{requirements.recommended_max} photographs give
-              the best likeness. At least {requirements.minimum} are needed, including{" "}
-              {requirements.minimum_half_body} showing head and shoulders or more.
+              the best likeness; {requirements.minimum} is the minimum. Use whatever exists —
+              close portraits are fine.
             </p>
           )}
         </header>
@@ -163,6 +165,9 @@ export default function Upload() {
                     <span>{shot.label}</span>
                   </li>
                 ))}
+                {requirements.note && (
+                  <li className="pt-2 text-xs text-neutral-500">{requirements.note}</li>
+                )}
               </ul>
             </div>
             <div>
@@ -204,7 +209,13 @@ export default function Upload() {
               <span className="text-neutral-300">
                 {accepted.length} usable of {set.photos.length}
               </span>
-              <span className="text-neutral-400">{halfBody} half body</span>
+              <span className="text-neutral-400">{halfBody} with chest in frame</span>
+              {accepted.length > 0 && (
+                <span className="text-neutral-400">
+                  Avatar will be{" "}
+                  <span className="text-neutral-200">{set.framing_label}</span>
+                </span>
+              )}
             </div>
 
             <ul className="grid gap-2 sm:grid-cols-2">
@@ -221,7 +232,7 @@ export default function Upload() {
                   <span className="shrink-0 text-xs text-neutral-400">
                     {photo.accepted
                       ? photo.half_body
-                        ? "half body"
+                        ? "chest in frame"
                         : "portrait"
                       : (photo.reasons.map((r) => REASON_TEXT[r] ?? r).join(", ") ||
                         "unusable")}
@@ -234,13 +245,24 @@ export default function Upload() {
               <ul className="space-y-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
                 {set.requirements.map((r) => (
                   <li key={r.key} className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                    <span className={r.met ? "text-emerald-400" : "text-amber-400"}>
-                      {r.met ? "✓" : "•"}
+                    <span
+                      className={
+                        r.met
+                          ? "text-emerald-400"
+                          : r.blocking
+                            ? "text-amber-400"
+                            : "text-neutral-600"
+                      }
+                    >
+                      {r.met ? "✓" : r.blocking ? "•" : "○"}
                     </span>
                     <span className="text-neutral-300">{r.label}</span>
                     <span className="tabular-nums text-neutral-500">
                       {r.current} of {r.target}
                     </span>
+                    {!r.met && !r.blocking && (
+                      <span className="text-xs text-neutral-600">optional</span>
+                    )}
                     {!r.met && r.hint && (
                       <span className="w-full pl-5 text-xs text-neutral-500">{r.hint}</span>
                     )}
