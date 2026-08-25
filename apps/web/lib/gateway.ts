@@ -150,6 +150,11 @@ export const api = {
   evaluate: (id: string) =>
     request<PhotoSet>(`/api/photo-sets/${id}/evaluate`, { method: "POST" }),
 
+  // Re-runs the current checks over images already uploaded, so a validator
+  // fix does not mean gathering the photographs again.
+  revalidate: (id: string) =>
+    request<PhotoSet>(`/api/photo-sets/${id}/revalidate`, { method: "POST" }),
+
   train: (id: string) =>
     request<{ job_id: string; status: string }>(`/api/photo-sets/${id}/train`, {
       method: "POST",

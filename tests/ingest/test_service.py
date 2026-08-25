@@ -138,3 +138,32 @@ async def test_max_uploads_is_above_the_accepted_maximum():
     from avatar.ingest.validate import MAX_ACCEPTED
 
     assert MAX_UPLOADS > MAX_ACCEPTED
+
+
+async def test_revalidation_reruns_the_current_rules_on_stored_images(db, store, owner):
+    # A validator fix must reach photographs already uploaded. Asking a family
+    # to gather pictures of someone who has died a second time is not an option.
+    from sqlalchemy import select
+
+    from avatar.gateway.models import Photo
+    from avatar.ingest.service import revalidate_set
+
+    ps = await create_photo_set(db, owner.id)
+    await add_photo(db, store, ps.id, owner.id, "x.jpg", "image/jpeg", an_image())
+
+    photo = (await db.execute(select(Photo).where(Photo.photo_set_id == ps.id))).scalar_one()
+    photo.accepted = True          # a stale verdict from older rules
+    await db.commit()
+
+    await revalidate_set(db, store, ps.id, owner.id)
+
+    await db.refresh(photo)
+    assert photo.accepted is False, "the current rules should reject a faceless image"
+
+
+async def test_a_stranger_cannot_revalidate_a_photo_set(db, store, owner, stranger):
+    from avatar.ingest.service import revalidate_set
+
+    ps = await create_photo_set(db, owner.id)
+    with pytest.raises(TenantError):
+        await revalidate_set(db, store, ps.id, stranger.id)

@@ -86,6 +86,12 @@ export default function Upload() {
     setSet(await api.evaluate(setId));
   }
 
+  async function recheck() {
+    if (!setId) return;
+    setError(null);
+    setSet(await api.revalidate(setId));
+  }
+
   async function startTraining() {
     if (!setId) return;
     try {
@@ -223,6 +229,13 @@ export default function Upload() {
                 className="rounded-full bg-white/10 px-6 py-2.5 text-sm hover:bg-white/20"
               >
                 Check the set
+              </button>
+              <button
+                onClick={recheck}
+                title="Re-runs the checks over the photographs already uploaded"
+                className="rounded-full bg-white/10 px-6 py-2.5 text-sm hover:bg-white/20"
+              >
+                Re-check photographs
               </button>
               <button
                 onClick={startTraining}

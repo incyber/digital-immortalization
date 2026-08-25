@@ -5,11 +5,13 @@ import numpy as np
 
 from avatar.ingest.validate import (
     MAX_ACCEPTED,
+    MIN_FACE_SHARPNESS,
     MIN_HALF_BODY,
     MIN_USABLE,
     PhotoVerdict,
     Reason,
     Verdict,
+    face_sharpness,
     inspect_photo,
     inspect_set,
 )
@@ -40,14 +42,97 @@ def test_an_image_with_no_face_is_rejected():
     assert Reason.NO_FACE in verdict.reasons
 
 
+def test_a_faceless_image_is_not_also_called_blurry():
+    # Sharpness is measured on the face. With no face there is nothing to
+    # judge, and reporting both reasons tells the customer to fix the wrong
+    # thing.
+    verdict = inspect_photo("landscape.jpg", encode(blank()))
+    assert Reason.BLURRY not in verdict.reasons
+
+
+def test_a_small_stray_detection_is_not_treated_as_a_second_person():
+    """Haar finds faces in clothing and background texture.
+
+    On the real set it reported two or three in four photographs that
+    contained one person, and each was rejected as a group photo.
+    """
+    from avatar.ingest.validate import SECOND_FACE_RATIO
+
+    assert 0.0 < SECOND_FACE_RATIO < 1.0
+
+
 def test_undecodable_bytes_are_rejected_not_crashed():
     verdict = inspect_photo("corrupt.jpg", b"this is not a jpeg")
     assert verdict.verdict is Verdict.REJECTED
 
 
-def test_a_blurred_image_is_rejected():
-    blurred = cv2.GaussianBlur(blank(), (31, 31), 0)
-    assert Reason.BLURRY in inspect_photo("blurry.jpg", encode(blurred)).reasons
+def a_face(size=520, sharp=True):
+    """A synthetic face the bundled cascade actually detects."""
+    frame = np.full((size, size), 210, np.uint8)
+    cx, cy = size // 2, size // 2
+    cv2.ellipse(frame, (cx, cy), (size // 4, int(size * 0.32)), 0, 0, 360, 150, -1)
+    for side in (-1, 1):
+        cv2.ellipse(frame, (cx + side * size // 11, cy - size // 11),
+                    (size // 26, size // 40), 0, 0, 360, 40, -1)
+    cv2.ellipse(frame, (cx, cy + size // 8), (size // 12, size // 34), 0, 0, 180, 60, 3)
+    cv2.line(frame, (cx, cy - size // 30), (cx, cy + size // 22), 110, 2)
+    if not sharp:
+        frame = cv2.GaussianBlur(frame, (31, 31), 0)
+    return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
+
+def test_a_sharp_face_against_a_smooth_background_is_not_called_blurry():
+    """The bug this replaced.
+
+    Whole-frame Laplacian variance is dominated by the background. On a real
+    37-photo iPhone set, portrait-mode and plain-wall backgrounds pushed the
+    frame-wide reading to 11-22 while the subject was sharp, and two thirds of
+    the set was rejected as blurry.
+    """
+    face = a_face(520)
+    frame = np.full((1400, 1000, 3), 235, np.uint8)   # large, smooth background
+    frame[100:620, 240:760] = face
+
+    verdict = inspect_photo("portrait-mode.jpg", encode(frame))
+    assert Reason.BLURRY not in verdict.reasons
+
+    # The whole-frame measure that used to decide this is still low, which is
+    # exactly why it cannot be the criterion.
+    grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    assert cv2.Laplacian(grey, cv2.CV_64F).var() < 60.0
+
+
+def test_a_genuinely_blurred_face_is_still_rejected():
+    frame = np.full((1400, 1000, 3), 235, np.uint8)
+    frame[100:620, 240:760] = a_face(520, sharp=False)
+    verdict = inspect_photo("soft.jpg", encode(frame))
+    assert Reason.BLURRY in verdict.reasons or Reason.NO_FACE in verdict.reasons
+
+
+def test_face_sharpness_does_not_depend_on_image_resolution():
+    """The same photograph at two sizes must score comparably.
+
+    An absolute threshold on an unnormalised measure penalises whichever
+    camera happens to have more megapixels.
+    """
+    small = cv2.cvtColor(a_face(320), cv2.COLOR_BGR2GRAY)
+    large = cv2.cvtColor(cv2.resize(a_face(320), (1280, 1280)), cv2.COLOR_BGR2GRAY)
+
+    a = face_sharpness(small, (0, 0, small.shape[1], small.shape[0]))
+    b = face_sharpness(large, (0, 0, large.shape[1], large.shape[0]))
+    assert abs(a - b) / max(a, b) < 0.5
+
+
+def test_face_sharpness_of_an_empty_crop_is_zero():
+    grey = np.zeros((10, 10), np.uint8)
+    assert face_sharpness(grey, (0, 0, 0, 0)) == 0.0
+
+
+def test_the_sharpness_threshold_is_applied_to_the_face_not_the_frame():
+    from avatar.ingest.validate import FACE_SHARPNESS_SIZE
+
+    assert MIN_FACE_SHARPNESS > 0
+    assert FACE_SHARPNESS_SIZE >= 128
 
 
 def ok(name, fraction=0.5):

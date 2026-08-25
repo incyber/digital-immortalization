@@ -22,6 +22,7 @@ from avatar.ingest.service import (
     describe,
     evaluate_set,
     get_photo_set,
+    revalidate_set,
 )
 from avatar.ingest.validate import (
     MIN_HALF_BODY,
@@ -135,6 +136,28 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
     ):
         try:
             photo_set = await evaluate_set(db, photo_set_id, user_id)
+        except TenantError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        photos = (
+            (await db.execute(select(Photo).where(Photo.photo_set_id == photo_set_id)))
+            .scalars()
+            .all()
+        )
+        return describe(photo_set, list(photos))
+
+    @router.post("/api/photo-sets/{photo_set_id}/revalidate")
+    async def revalidate(
+        photo_set_id: str,
+        db: AsyncSession = Depends(get_db),  # noqa: B008
+        user_id: str = Depends(current_user),
+    ):
+        """Re-check stored images against the current rules.
+
+        Exists so a validator fix reaches photographs already uploaded, rather
+        than asking a family to gather them again.
+        """
+        try:
+            photo_set = await revalidate_set(db, store, photo_set_id, user_id)
         except TenantError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         photos = (

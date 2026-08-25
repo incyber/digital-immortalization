@@ -120,6 +120,41 @@ def _safe_name(filename: str, index: int) -> str:
     return f"photo-{index:03d}.{suffix}"
 
 
+async def revalidate_set(
+    db: AsyncSession, store: BlobStore, photo_set_id: str, owner_id: str
+) -> PhotoSet:
+    """Re-inspect every stored image with the current rules.
+
+    Validation improves; customers should not have to re-upload photographs of
+    somebody who has died because the checks changed. The images are already in
+    storage, so this re-reads them and rewrites the verdicts in place.
+    """
+    # Ownership first; the row itself is re-read by evaluate_set at the end.
+    await get_photo_set(db, photo_set_id, owner_id)
+
+    photos = (
+        (await db.execute(select(Photo).where(Photo.photo_set_id == photo_set_id)))
+        .scalars()
+        .all()
+    )
+
+    for photo in photos:
+        try:
+            data = await store.get(owner_id, photo.blob_key)
+        except Exception:  # noqa: BLE001 - a missing object is simply unusable
+            photo.accepted = False
+            photo.rejection_reasons = json.dumps(["stored image could not be read"])
+            continue
+
+        verdict = inspect_photo(photo.filename, data)
+        photo.accepted = verdict.verdict is Verdict.OK
+        photo.rejection_reasons = json.dumps([r.value for r in verdict.reasons]) or None
+        photo.face_height_fraction = verdict.face_height_fraction
+
+    await db.commit()
+    return await evaluate_set(db, photo_set_id, owner_id)
+
+
 async def evaluate_set(db: AsyncSession, photo_set_id: str, owner_id: str) -> PhotoSet:
     """Judge the whole set and move it to ready or rejected."""
     photo_set = await get_photo_set(db, photo_set_id, owner_id)
