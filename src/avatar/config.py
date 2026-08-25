@@ -83,6 +83,14 @@ class Settings(BaseSettings):
 
     assets_dir: str = "assets"
 
+    # Signs session cookies. The default is obviously not a secret and is
+    # rejected by assert_production_ready; set SESSION_SECRET in deployment.
+    session_secret: str = "dev-session-secret-not-for-production"
+
+    # Session cookies must be Secure in deployment. False locally because
+    # http://localhost is not a secure origin and the cookie would be dropped.
+    cookies_secure: bool = False
+
     # Origins allowed to call the gateway. Listed explicitly rather than
     # wildcarded because these responses carry room tokens. The dev port is
     # pinned high to avoid colliding with whatever else is on 3000.

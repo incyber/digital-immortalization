@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from avatar.config import Settings
 from avatar.gateway.consent import assert_consented
 from avatar.gateway.dispatch import AgentDispatcher
-from avatar.gateway.models import Avatar, Session
+from avatar.gateway.models import Session
+from avatar.gateway.tenancy import assert_owned
 
 # Long enough for a real conversation, short enough that a leaked token is not
 # a standing invitation.
@@ -61,18 +62,25 @@ async def open_session(
     db: AsyncSession,
     cfg: Settings,
     avatar_id: str,
+    owner_id: str,
     dispatcher: AgentDispatcher | None = None,
 ) -> dict[str, str]:
     """Create a room, put an agent in it, and return joining details.
 
-    Raises ConsentError before doing anything else. Nothing is written, no
-    token exists, and no agent is dispatched for an avatar that has not cleared
-    the gate.
-    """
-    consent = await assert_consented(db, avatar_id)
+    Two independent gates, in this order:
 
-    avatar = await db.get(Avatar, avatar_id)
-    assert avatar is not None  # assert_consented already established this
+      Ownership - is this avatar this tenant's business at all? Checked first,
+      so a stranger probing avatar ids cannot learn which exist or what their
+      consent status is.
+
+      Consent - is a recreation permitted at all? Checked second.
+
+    Neither implies the other. An avatar can be fully consented and belong to
+    somebody else entirely. Nothing is written, no token exists, and no agent
+    is dispatched unless both pass.
+    """
+    avatar = await assert_owned(db, avatar_id, owner_id)
+    consent = await assert_consented(db, avatar_id)
 
     room = f"call-{uuid.uuid4().hex[:12]}"
     session = Session(avatar_id=avatar_id, room_name=room)
@@ -119,4 +127,14 @@ def assert_production_ready(cfg: Settings) -> None:
         raise ValueError(
             f"LIVEKIT_API_SECRET is shorter than {MIN_SECRET_BYTES} bytes, "
             "which is below the HS256 minimum"
+        )
+    if cfg.session_secret == Settings.model_fields["session_secret"].default:
+        raise ValueError(
+            "SESSION_SECRET is still the development default; anyone could "
+            "forge a session cookie for any account"
+        )
+    if not cfg.cookies_secure:
+        raise ValueError(
+            "COOKIES_SECURE is false; session cookies would be sent over "
+            "plaintext HTTP"
         )

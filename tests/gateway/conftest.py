@@ -61,3 +61,12 @@ async def avatar_without_consent(db: AsyncSession, owner):
 async def verified_avatar(db: AsyncSession, avatar):
     await set_status(db, avatar, "verified")
     return avatar
+
+
+@pytest_asyncio.fixture
+async def other_owner(db: AsyncSession):
+    """A second tenant. Every isolation test needs somebody to be excluded."""
+    u = User(email="stranger@example.com", password_hash="x")
+    db.add(u)
+    await db.commit()
+    return u
