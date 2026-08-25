@@ -82,32 +82,50 @@ def a_face(size=520, sharp=True):
     return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
 
 
-def test_a_sharp_face_against_a_smooth_background_is_not_called_blurry():
-    """The bug this replaced.
+def test_a_sharp_region_on_a_smooth_background_scores_sharp():
+    """The bug this replaced, tested where it can be tested honestly.
 
     Whole-frame Laplacian variance is dominated by the background. On a real
     37-photo iPhone set, portrait-mode and plain-wall backgrounds pushed the
     frame-wide reading to 11-22 while the subject was sharp, and two thirds of
     the set was rejected as blurry.
+
+    Asserted against face_sharpness directly with a known box, rather than
+    through inspect_photo. The bundled cascade does not detect drawn faces, so
+    a synthetic end-to-end version of this test would pass whether the fix
+    worked or not - which is what an earlier version of it did.
     """
-    face = a_face(520)
     frame = np.full((1400, 1000, 3), 235, np.uint8)   # large, smooth background
-    frame[100:620, 240:760] = face
-
-    verdict = inspect_photo("portrait-mode.jpg", encode(frame))
-    assert Reason.BLURRY not in verdict.reasons
-
-    # The whole-frame measure that used to decide this is still low, which is
-    # exactly why it cannot be the criterion.
+    frame[100:620, 240:760] = a_face(520)
     grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # The whole-frame measure is low. That is exactly why it cannot decide.
     assert cv2.Laplacian(grey, cv2.CV_64F).var() < 60.0
 
+    # The subject is not.
+    assert face_sharpness(grey, (240, 100, 520, 520)) >= MIN_FACE_SHARPNESS
 
-def test_a_genuinely_blurred_face_is_still_rejected():
+
+def test_a_genuinely_soft_region_scores_below_the_threshold():
     frame = np.full((1400, 1000, 3), 235, np.uint8)
     frame[100:620, 240:760] = a_face(520, sharp=False)
-    verdict = inspect_photo("soft.jpg", encode(frame))
-    assert Reason.BLURRY in verdict.reasons or Reason.NO_FACE in verdict.reasons
+    grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    assert face_sharpness(grey, (240, 100, 520, 520)) < MIN_FACE_SHARPNESS
+
+
+def test_the_bundled_cascade_does_not_detect_drawn_faces():
+    """Recorded so the limitation is visible rather than rediscovered.
+
+    Haar keys on photographic texture. Every synthetic face tried here went
+    undetected, which means any end-to-end fixture built from one tests
+    nothing. Detection-dependent behaviour is covered against real
+    photographs; everything else is tested through the functions directly.
+    """
+    from avatar.ingest.validate import detect_faces
+
+    frame = np.full((1400, 1000, 3), 235, np.uint8)
+    frame[100:620, 240:760] = a_face(520)
+    assert detect_faces(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)) == []
 
 
 def test_face_sharpness_does_not_depend_on_image_resolution():

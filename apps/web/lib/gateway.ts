@@ -176,7 +176,13 @@ export const api = {
     }),
 
   job: (id: string) =>
-    request<{ id: string; status: string; error: string | null }>(`/api/training-jobs/${id}`),
+    request<{
+      id: string;
+      status: string;
+      error: string | null;
+      progress: number;
+      avatar_id: string | null;
+    }>(`/api/training-jobs/${id}`),
 };
 
 export type SessionDetails = {

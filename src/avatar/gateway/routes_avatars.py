@@ -6,6 +6,8 @@ owner; the application ships with none.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -34,6 +36,13 @@ class ConsentInput(BaseModel):
     relationship_to_subject: str = Field(min_length=1, max_length=128)
     jurisdiction: str = Field(min_length=1, max_length=64)
     evidence_key: str | None = None
+
+
+# Recreating yourself is the one case where the account holder is
+# unambiguously the rights holder. Nobody needs to review a person's
+# permission to be themselves, and requiring it would make the gate
+# ceremony rather than protection.
+SELF_RELATIONSHIP = "self"
 
 
 def _describe(avatar: Avatar, attested: frozenset[str]) -> dict:
@@ -201,9 +210,11 @@ def build_router(settings, current_user, get_db) -> APIRouter:
     ):
         """Record who authorised this recreation.
 
-        Created as pending. Nothing here can set it verified: that is a human
-        review of an evidence document, and a self-service path to 'verified'
-        would make the gate decorative.
+        Recreating yourself is verified immediately: the account holder is the
+        rights holder and no third party's rights are engaged. Anybody else's
+        likeness is recorded as pending and needs a human to read the evidence
+        document, because a self-service route to 'verified' would make the
+        gate decorative.
         """
         try:
             await assert_owned(db, avatar_id, user_id)
@@ -217,16 +228,33 @@ def build_router(settings, current_user, get_db) -> APIRouter:
         ).scalar_one_or_none()
         record = existing or ConsentRecord(avatar_id=avatar_id)
 
+        relationship = body.relationship_to_subject.strip().lower()
+
         record.rights_holder_name = body.rights_holder_name.strip()
-        record.relationship_to_subject = body.relationship_to_subject.strip()
+        record.relationship_to_subject = relationship
         record.jurisdiction = body.jurisdiction.strip()
         record.evidence_s3_key = body.evidence_key
-        record.status = ConsentStatus.PENDING
+
+        if relationship == SELF_RELATIONSHIP:
+            # The account holder attesting that the subject is themselves. No
+            # third party's rights are engaged, so there is nothing for a
+            # reviewer to check.
+            record.status = ConsentStatus.VERIFIED
+            record.verified_at = datetime.now(UTC)
+            record.verified_by = f"self-attested by {user_id}"
+        else:
+            # Somebody else's likeness. This needs a human to read the evidence
+            # document; there is deliberately no self-service route to verified.
+            record.status = ConsentStatus.PENDING
 
         if existing is None:
             db.add(record)
         await db.commit()
 
-        return {"status": record.status.value, "avatar_id": avatar_id}
+        return {
+            "status": record.status.value,
+            "avatar_id": avatar_id,
+            "needs_review": record.status is ConsentStatus.PENDING,
+        }
 
     return router

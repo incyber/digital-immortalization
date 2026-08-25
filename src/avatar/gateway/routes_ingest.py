@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from avatar.gateway.models import Photo, PhotoSet, PhotoSetStatus, TrainingJob, TrainingStatus
 from avatar.gateway.tenancy import TenantError
+from avatar.ingest.finalise import FinaliseError, finalise_avatar
 from avatar.ingest.service import (
     add_photo,
     create_photo_set,
@@ -218,6 +219,12 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
             .all()
         )
 
+        if not photo_set.avatar_id:
+            raise HTTPException(
+                status_code=409,
+                detail="attach this photo set to an avatar before building",
+            )
+
         result = await runner.start(
             TrainingRequest(
                 tenant_id=user_id,
@@ -257,27 +264,53 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
         if job is None:
             raise HTTPException(status_code=404, detail="no such job")
 
+        progress = 1.0 if job.status is TrainingStatus.SUCCEEDED else 0.0
+        avatar_id: str | None = None
+
         if job.status in (TrainingStatus.QUEUED, TrainingStatus.RUNNING) and job.external_id:
             result = await runner.poll(job.external_id)
             job.status = _STATE_TO_STATUS[result.state]
             job.output_key = result.output_key or job.output_key
             job.error = result.error or job.error
+            progress = result.progress
 
             if job.status is TrainingStatus.SUCCEEDED:
                 photo_set = await db.get(PhotoSet, job.photo_set_id)
                 if photo_set is not None:
                     photo_set.status = PhotoSetStatus.TRAINED
+                await db.commit()
+
+                # Training on its own changes nothing the customer can see.
+                # Building the renderable assets is what makes the avatar
+                # callable, so it happens here rather than being a later step
+                # somebody has to know about.
+                try:
+                    avatar = await finalise_avatar(
+                        db, store, settings, job.photo_set_id, user_id
+                    )
+                    avatar_id = avatar.id
+                    progress = 1.0
+                except FinaliseError as exc:
+                    job.status = TrainingStatus.FAILED
+                    job.error = f"could not build the avatar: {exc}"
             elif job.status is TrainingStatus.FAILED:
                 photo_set = await db.get(PhotoSet, job.photo_set_id)
                 if photo_set is not None:
                     photo_set.status = PhotoSetStatus.FAILED
+
             await db.commit()
+
+        if avatar_id is None:
+            photo_set = await db.get(PhotoSet, job.photo_set_id)
+            avatar_id = photo_set.avatar_id if photo_set else None
 
         return {
             "id": job.id,
             "status": job.status.value,
             "provider": job.provider,
             "error": job.error,
+            "progress": round(max(0.0, min(1.0, progress)), 3),
+            "avatar_id": avatar_id,
         }
 
     return router

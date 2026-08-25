@@ -13,6 +13,7 @@
 //   at the end which twelve pictures were unusable is far worse than telling
 //   them one at a time while they still have the folder open.
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type PhotoSet, type Requirements } from "@/lib/gateway";
@@ -34,6 +35,9 @@ export default function Upload() {
   const [error, setError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<string | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [builtAvatarId, setBuiltAvatarId] = useState<string | null>(null);
+  const [jobError, setJobError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -106,6 +110,7 @@ export default function Upload() {
       const job = await api.train(setId);
       setJobId(job.job_id);
       setJobStatus(job.status);
+      setProgress(0.02);   // visible immediately, so the click clearly landed
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start training");
     }
@@ -119,11 +124,18 @@ export default function Upload() {
       try {
         const job = await api.job(jobId);
         setJobStatus(job.status);
-        if (job.status === "succeeded" || job.status === "failed") clearInterval(timer);
+        // Never let the bar go backwards: a poll that arrives out of order
+        // otherwise makes it jump about.
+        setProgress((p) => Math.max(p, job.progress));
+        if (job.avatar_id) setBuiltAvatarId(job.avatar_id);
+        if (job.error) setJobError(job.error);
+        if (job.status === "succeeded" || job.status === "failed") {
+          clearInterval(timer);
+        }
       } catch {
         // A failed poll is not a failed run; keep polling.
       }
-    }, 3000);
+    }, 1500);
     return () => clearInterval(timer);
   }, [jobId]);
 
@@ -303,10 +315,53 @@ export default function Upload() {
             )}
 
             {jobStatus && (
-              <p className="text-sm text-neutral-400">
-                Training: <span className="text-neutral-200">{jobStatus}</span>
-                {jobStatus === "running" && " — this takes a while, you can close this page."}
-              </p>
+              <div className="space-y-3 rounded-xl border border-white/10 bg-white/5 p-5">
+                <div className="flex items-baseline justify-between gap-4">
+                  <span className="text-sm text-neutral-300">
+                    {jobStatus === "succeeded"
+                      ? "Your avatar is ready"
+                      : jobStatus === "failed"
+                        ? "Building failed"
+                        : "Building the avatar…"}
+                  </span>
+                  <span className="tabular-nums text-xs text-neutral-500">
+                    {Math.round(progress * 100)}%
+                  </span>
+                </div>
+
+                <div
+                  role="progressbar"
+                  aria-valuenow={Math.round(progress * 100)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  className="h-1.5 w-full overflow-hidden rounded-full bg-white/10"
+                >
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      jobStatus === "failed" ? "bg-red-500" : "bg-emerald-400"
+                    }`}
+                    style={{ width: `${Math.max(2, progress * 100)}%` }}
+                  />
+                </div>
+
+                {jobStatus !== "succeeded" && jobStatus !== "failed" && (
+                  <p className="text-xs text-neutral-500">
+                    You can close this page — it keeps building.
+                  </p>
+                )}
+
+                {jobError && <p className="text-sm text-red-300">{jobError}</p>}
+
+                {jobStatus === "succeeded" && builtAvatarId && (
+                  <Link
+                    href={`/call/${builtAvatarId}`}
+                    className="inline-block rounded-full bg-white px-6 py-2.5 text-sm
+                               font-medium text-neutral-950 transition hover:bg-neutral-200"
+                  >
+                    Talk to them
+                  </Link>
+                )}
+              </div>
             )}
           </section>
         )}

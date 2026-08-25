@@ -2,7 +2,7 @@
 # binary checked into .tools/ rather than installed on the host.
 UV := .tools/uv
 
-.PHONY: install infra-up infra-down test test-e2e latency lint agent gateway web clean
+.PHONY: install infra-up infra-down test test-e2e latency consent lint agent gateway web clean
 
 install:                ## Resolve dependencies and install the package editable
 	$(UV) sync --extra dev
@@ -23,6 +23,9 @@ test-e2e:               ## Real LiveKit and Ollama; requires make infra-up
 
 latency:                ## Measure end of speech to first avatar audio
 	E2E=1 $(UV) run pytest tests/e2e/test_latency.py -q -s
+
+consent:                ## Review consent records: make consent ARGS="list"
+	$(UV) run python -m avatar.cli.consent $(ARGS)
 
 lint:
 	$(UV) run ruff check src tests

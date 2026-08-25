@@ -187,3 +187,71 @@ async def test_country_is_case_insensitive(client, country):
     await sign_in(client)
     response = await client.post("/api/avatars", json={**AVATAR, "country": country})
     assert response.status_code == 201
+
+
+async def test_recreating_yourself_is_verified_immediately(client):
+    """Nobody needs permission to be themselves.
+
+    Requiring a reviewer here would be ceremony, and it is the case that
+    otherwise dead-ends: build an avatar of yourself and never be able to call
+    it.
+    """
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/consent",
+        json={
+            "rights_holder_name": "Myself",
+            "relationship_to_subject": "self",
+            "jurisdiction": "US-WA",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["status"] == "verified"
+    assert response.json()["needs_review"] is False
+
+
+async def test_self_attestation_is_case_insensitive(client):
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/consent",
+        json={
+            "rights_holder_name": "Myself",
+            "relationship_to_subject": "Self",
+            "jurisdiction": "US-WA",
+        },
+    )
+    assert response.json()["status"] == "verified"
+
+
+async def test_anybody_elses_likeness_still_needs_review(client):
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/consent",
+        json={
+            "rights_holder_name": "Ana Chen",
+            "relationship_to_subject": "daughter",
+            "jurisdiction": "US-WA",
+        },
+    )
+    assert response.json()["status"] == "pending"
+    assert response.json()["needs_review"] is True
+
+
+async def test_a_stranger_cannot_self_attest_on_your_avatar(client):
+    await sign_in(client, "owner@example.com")
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    await client.post("/api/auth/logout")
+    await sign_in(client, "stranger@example.com")
+
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/consent",
+        json={
+            "rights_holder_name": "Me",
+            "relationship_to_subject": "self",
+            "jurisdiction": "US-WA",
+        },
+    )
+    assert response.status_code == 404
