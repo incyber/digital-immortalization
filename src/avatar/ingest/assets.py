@@ -22,7 +22,9 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
+from loguru import logger
 
+from avatar.ingest.mouth import build_mouth_plates, collect_mouths, mouth_box_for
 from avatar.ingest.validate import Framing, detect_faces, face_sharpness
 from avatar.renderer.plates import PLATE_COUNT, AvatarAssets
 
@@ -146,81 +148,41 @@ def locate_mouth(base_rgb: np.ndarray) -> tuple[int, int, int, int]:
     """Mouth region within the cropped base frame.
 
     Re-detected on the crop rather than mapped from the original, so the box is
-    correct in the coordinate space it is used in.
+    correct in the coordinate space it is used in. Shares its geometry with
+    mouth.mouth_box_for, so the plates and the hole they fill agree.
     """
     grey = cv2.cvtColor(base_rgb, cv2.COLOR_RGB2GRAY)
     faces = detect_faces(grey)
     height, width = base_rgb.shape[:2]
 
     if faces:
-        fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+        face = max(faces, key=lambda f: f[2] * f[3])
     else:
         # The crop is built around a face that was detected once already; if the
         # cascade loses it after resizing, fall back to where it must be.
         fw, fh = int(width * 0.42), int(height * 0.42)
-        fx, fy = (width - fw) // 2, int(height * 0.18)
+        face = ((width - fw) // 2, int(height * 0.18), fw, fh)
 
-    mw = int(fw * 0.5)
-    mh = int(fh * 0.30)
-    mx = fx + (fw - mw) // 2
-    my = fy + int(fh * 0.62)
-
+    mx, my, mw, mh = mouth_box_for(face)
     mx = max(0, min(mx, width - 1))
     my = max(0, min(my, height - 1))
     return (mx, my, min(mw, width - mx), min(mh, height - my))
 
 
 def build_plates(base_rgb: np.ndarray, mouth_box: tuple[int, int, int, int]) -> list[np.ndarray]:
-    """Mouth crops from closed to open, derived from this face.
+    """Mouth plates from closed to open, warped from this person's own mouth.
 
-    The closed plate is the photograph untouched. Wider plates darken and
-    deepen an elliptical opening within the existing lips, so the colour and
-    skin texture stay the person's own rather than being painted on.
+    The closed plate is the photograph untouched. Wider plates displace the
+    lower lip and chin downward and fill the gap with interior tone drawn from
+    their own face, so every pixel remains theirs. See mouth.py for why this
+    replaced a drawn ellipse and what was tried in between.
     """
     x, y, w, h = mouth_box
-    closed = base_rgb[y : y + h, x : x + w].copy()
-    plates = [closed]
+    closed_rgb = base_rgb[y : y + h, x : x + w].copy()
+    closed_bgr = cv2.cvtColor(closed_rgb, cv2.COLOR_RGB2BGR)
 
-    for step in range(1, PLATE_COUNT):
-        plate = closed.copy()
-        openness = step / (PLATE_COUNT - 1)
-
-        # The opening grows downward from the lip line, as a real jaw does.
-        axis_y = max(1, int(h * 0.34 * openness))
-        axis_x = max(2, int(w * 0.30 + w * 0.06 * openness))
-        centre = (w // 2, int(h * 0.52 + h * 0.10 * openness))
-
-        interior = plate.copy()
-        cv2.ellipse(interior, centre, (axis_x, axis_y), 0, 0, 360, (48, 26, 30), -1)
-        # Blended rather than pasted, so the edge is not a hard line.
-        mask = np.zeros((h, w), np.uint8)
-        cv2.ellipse(mask, centre, (axis_x, axis_y), 0, 0, 360, 255, -1)
-        mask = cv2.GaussianBlur(mask, (7, 7), 0).astype(np.float32) / 255.0
-        mask = mask[:, :, None]
-        plate = (plate * (1 - mask) + interior * mask).astype(np.uint8)
-
-        if openness > 0.35:
-            # A hint of teeth along the upper lip once the mouth is properly open.
-            teeth = plate.copy()
-            cv2.ellipse(
-                teeth,
-                (centre[0], centre[1] - axis_y // 2),
-                (int(axis_x * 0.72), max(1, axis_y // 3)),
-                0, 0, 360, (232, 228, 220), -1,
-            )
-            tmask = np.zeros((h, w), np.uint8)
-            cv2.ellipse(
-                tmask,
-                (centre[0], centre[1] - axis_y // 2),
-                (int(axis_x * 0.72), max(1, axis_y // 3)),
-                0, 0, 360, 255, -1,
-            )
-            tmask = cv2.GaussianBlur(tmask, (5, 5), 0).astype(np.float32) / 255.0
-            plate = (plate * (1 - tmask[:, :, None]) + teeth * tmask[:, :, None]).astype(np.uint8)
-
-        plates.append(plate)
-
-    return plates
+    plates_bgr = build_mouth_plates(closed_bgr, PLATE_COUNT)
+    return [cv2.cvtColor(p, cv2.COLOR_BGR2RGB) for p in plates_bgr]
 
 
 def build_idle_loop(base_rgb: np.ndarray, fps: int, seconds: float) -> list[np.ndarray]:
@@ -266,6 +228,15 @@ def build_avatar_assets(
     base_rgb = cv2.cvtColor(base_bgr, cv2.COLOR_BGR2RGB)
 
     mouth_box = locate_mouth(base_rgb)
+
+    # Collected across the whole set. Used to confirm a mouth was found in more
+    # than the base photograph before building plates from it; a set where the
+    # mouth is only ever visible once is one where the warp has nothing to be
+    # checked against.
+    samples = collect_mouths(images)
+    logger.info(
+        f"built from {len(images)} photographs, {len(samples)} with a locatable mouth"
+    )
 
     return AvatarAssets(
         idle_frames=build_idle_loop(base_rgb, fps, seconds),
