@@ -95,11 +95,30 @@ class PhotoVerdict:
 
 
 @dataclass
+class Requirement:
+    """One condition, its target, and where the set currently stands.
+
+    Reported per requirement rather than as a single pass/fail so the page can
+    show progress while photographs are still arriving. A customer who has
+    uploaded twenty-four usable pictures and is blocked should be able to see
+    which condition is unmet and by how much, not face a dead button.
+    """
+
+    key: str
+    label: str
+    current: int
+    target: int
+    met: bool
+    hint: str = ""
+
+
+@dataclass
 class SetVerdict:
     """Whether the set as a whole can train a likeness."""
 
     photos: list[PhotoVerdict]
     problems: list[str] = field(default_factory=list)
+    requirements: list[Requirement] = field(default_factory=list)
 
     @property
     def usable(self) -> list[PhotoVerdict]:
@@ -222,6 +241,37 @@ def inspect_set(photos: list[PhotoVerdict]) -> SetVerdict:
     """
     result = SetVerdict(photos=photos)
     usable = result.usable
+    half_body = result.half_body_count
+
+    result.requirements = [
+        Requirement(
+            key="usable",
+            label="Usable photographs",
+            current=len(usable),
+            target=MIN_USABLE,
+            met=len(usable) >= MIN_USABLE,
+            hint=f"{RECOMMENDED_MIN}-{RECOMMENDED_MAX} gives the best likeness.",
+        ),
+        Requirement(
+            key="half_body",
+            label="Showing head and shoulders or more",
+            current=half_body,
+            target=MIN_HALF_BODY,
+            met=half_body >= MIN_HALF_BODY,
+            hint=(
+                "Stand further back so the shoulders and chest are in frame. "
+                "Close-up portraits alone produce a floating head."
+            ),
+        ),
+        Requirement(
+            key="not_too_many",
+            label=f"No more than {MAX_ACCEPTED}",
+            current=len(usable),
+            target=MAX_ACCEPTED,
+            met=len(usable) <= MAX_ACCEPTED,
+            hint="Past this the model overfits rather than improving.",
+        ),
+    ]
 
     if len(usable) < MIN_USABLE:
         result.problems.append(
@@ -235,11 +285,11 @@ def inspect_set(photos: list[PhotoVerdict]) -> SetVerdict:
             "past that the model overfits rather than improving"
         )
 
-    if usable and result.half_body_count < MIN_HALF_BODY:
+    if usable and half_body < MIN_HALF_BODY:
         result.problems.append(
-            f"only {result.half_body_count} images show head and shoulders or more; "
-            f"at least {MIN_HALF_BODY} are needed for a half-body avatar rather "
-            "than a floating head"
+            f"only {half_body} of {len(usable)} images show head and shoulders or "
+            f"more; at least {MIN_HALF_BODY} are needed, or the result is a "
+            "floating head rather than a half-body avatar"
         )
 
     return result

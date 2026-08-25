@@ -176,6 +176,19 @@ async def evaluate_set(db: AsyncSession, photo_set_id: str, owner_id: str) -> Ph
     ]
     result = inspect_set(verdicts)
 
+    photo_set.requirements_json = json.dumps(
+        [
+            {
+                "key": r.key,
+                "label": r.label,
+                "current": r.current,
+                "target": r.target,
+                "met": r.met,
+                "hint": r.hint,
+            }
+            for r in result.requirements
+        ]
+    )
     photo_set.usable_count = len(result.usable)
     photo_set.half_body_count = result.half_body_count
     photo_set.problems = json.dumps(result.problems) if result.problems else None
@@ -224,6 +237,9 @@ def describe(photo_set: PhotoSet, photos: list[Photo]) -> dict:
         "usable_count": photo_set.usable_count,
         "half_body_count": photo_set.half_body_count,
         "problems": json.loads(photo_set.problems) if photo_set.problems else [],
+        "requirements": (
+            json.loads(photo_set.requirements_json) if photo_set.requirements_json else []
+        ),
         "photos": [
             {
                 "id": p.id,

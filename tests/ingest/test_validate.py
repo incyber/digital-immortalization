@@ -188,3 +188,38 @@ def test_exactly_the_minimum_is_accepted():
     photos += [ok(f"h{i}.jpg", 0.5) for i in range(MIN_USABLE - MIN_HALF_BODY)]
     result = inspect_set(photos)
     assert result.acceptable, result.problems
+
+
+def test_requirements_report_progress_not_just_failure():
+    """A dead button with no explanation is the failure this prevents.
+
+    Somebody who has uploaded twenty-four usable photographs and is still
+    blocked must be able to see which condition is unmet and by how much.
+    """
+    photos = [ok(f"h{i}.jpg", 0.42) for i in range(24)]  # all close portraits
+    result = inspect_set(photos)
+
+    by_key = {r.key: r for r in result.requirements}
+    assert by_key["usable"].met is True
+    assert by_key["usable"].current == 24
+
+    assert by_key["half_body"].met is False
+    assert by_key["half_body"].current == 0
+    assert by_key["half_body"].target == MIN_HALF_BODY
+    assert "further back" in by_key["half_body"].hint
+
+
+def test_the_blocking_problem_names_both_numbers():
+    # "only 2 of 24" tells somebody what to do; "not enough" does not.
+    photos = [ok(f"h{i}.jpg", 0.42) for i in range(22)]
+    photos += [ok(f"b{i}.jpg", 0.22) for i in range(2)]
+    result = inspect_set(photos)
+    assert any("2 of 24" in p for p in result.problems)
+
+
+def test_every_requirement_is_met_for_a_good_set():
+    photos = [ok(f"h{i}.jpg", 0.42) for i in range(18)]
+    photos += [ok(f"b{i}.jpg", 0.22) for i in range(MIN_HALF_BODY)]
+    result = inspect_set(photos)
+    assert all(r.met for r in result.requirements)
+    assert result.acceptable

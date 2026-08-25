@@ -45,12 +45,22 @@ export type PhotoVerdict = {
   half_body: boolean;
 };
 
+export type Requirement = {
+  key: string;
+  label: string;
+  current: number;
+  target: number;
+  met: boolean;
+  hint: string;
+};
+
 export type PhotoSet = {
   id: string;
   status: string;
   usable_count: number;
   half_body_count: number;
   problems: string[];
+  requirements: Requirement[];
   photos: PhotoVerdict[];
 };
 

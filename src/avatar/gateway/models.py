@@ -156,6 +156,9 @@ class PhotoSet(Base):
     usable_count: Mapped[int] = mapped_column(Integer, default=0)
     half_body_count: Mapped[int] = mapped_column(Integer, default=0)
     problems: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Per-requirement progress, so the upload page can show which condition is
+    # unmet and by how much rather than only a pass or fail.
+    requirements_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

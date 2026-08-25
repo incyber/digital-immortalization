@@ -79,6 +79,14 @@ export default function Upload() {
       await refresh(setId);
     }
     if (input.current) input.current.value = "";
+
+    // Evaluated here rather than behind a separate button. A set that is
+    // ready should say so on its own.
+    try {
+      setSet(await api.evaluate(setId));
+    } catch {
+      // Leave the per-image verdicts standing; the explicit button remains.
+    }
   }
 
   async function check() {
@@ -122,6 +130,13 @@ export default function Upload() {
   const accepted = set?.photos.filter((p) => p.accepted) ?? [];
   const halfBody = accepted.filter((p) => p.half_body).length;
   const ready = set?.status === "ready";
+  const unmet = (set?.requirements ?? []).filter((r) => !r.met);
+  const blockedBecause =
+    set && !ready
+      ? unmet.length > 0
+        ? unmet.map((r) => `${r.label.toLowerCase()}: ${r.current} of ${r.target}`).join("; ")
+        : "checking the set…"
+      : null;
 
   return (
     <main className="min-h-dvh bg-neutral-950 px-6 py-10 text-neutral-100">
@@ -215,10 +230,21 @@ export default function Upload() {
               ))}
             </ul>
 
-            {set.problems.length > 0 && (
-              <ul className="space-y-1 rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-200/90">
-                {set.problems.map((problem) => (
-                  <li key={problem}>{problem}</li>
+            {set.requirements.length > 0 && (
+              <ul className="space-y-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+                {set.requirements.map((r) => (
+                  <li key={r.key} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                    <span className={r.met ? "text-emerald-400" : "text-amber-400"}>
+                      {r.met ? "✓" : "•"}
+                    </span>
+                    <span className="text-neutral-300">{r.label}</span>
+                    <span className="tabular-nums text-neutral-500">
+                      {r.current} of {r.target}
+                    </span>
+                    {!r.met && r.hint && (
+                      <span className="w-full pl-5 text-xs text-neutral-500">{r.hint}</span>
+                    )}
+                  </li>
                 ))}
               </ul>
             )}
@@ -240,12 +266,19 @@ export default function Upload() {
               <button
                 onClick={startTraining}
                 disabled={!ready || Boolean(jobId)}
+                title={blockedBecause ?? "Start building the avatar"}
                 className="rounded-full bg-white px-6 py-2.5 text-sm font-medium text-neutral-950
                            transition hover:bg-neutral-200 disabled:opacity-40"
               >
                 Build the avatar
               </button>
             </div>
+
+            {blockedBecause && (
+              <p className="text-sm text-amber-200/90">
+                Not ready yet — {blockedBecause}.
+              </p>
+            )}
 
             {jobStatus && (
               <p className="text-sm text-neutral-400">
