@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from avatar.safety.crisis_lines import CrisisLine, for_country
+from avatar.services.voices import DEFAULT_LOCALE, normalise_locale
 from avatar.vision.state import SceneState
 
 # Kept short deliberately: a small model given a long prompt starts narrating
@@ -131,7 +132,10 @@ def persona_from_avatar(avatar, attested: frozenset[str]) -> Persona:
             "the recreation is invented rather than recalled"
         )
 
-    locale = _text(getattr(avatar, "locale", "")) or "en"
+    # Raises rather than falling back. A locale that quietly becomes English
+    # while a Spanish voice reads the result aloud is the failure this
+    # replaced, and it is silent right up until somebody hears it.
+    locale = normalise_locale(_text(getattr(avatar, "locale", "")) or DEFAULT_LOCALE)
     boundaries = _text(getattr(avatar, "boundaries", "")) or DEFAULT_BOUNDARIES.get(
         locale, DEFAULT_BOUNDARIES["en"]
     )

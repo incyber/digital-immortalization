@@ -114,8 +114,9 @@ def build_pipeline(
     """Assemble the conversation graph."""
     scene = SceneState()
 
-    stt = build_stt(cfg)
-    tts = build_tts(cfg)
+    # Both follow the avatar rather than global configuration.
+    stt = build_stt(cfg, persona.locale)
+    tts = build_tts(cfg, persona.locale)
     # Falls through to the configured backup provider when the primary runs
     # out of quota, rather than leaving somebody mid-conversation.
     llm = FallbackLLMService(build_providers(cfg))

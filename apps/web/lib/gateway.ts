@@ -118,6 +118,9 @@ export const api = {
 
   countries: () => request<{ countries: Country[] }>("/api/countries"),
 
+  languages: () =>
+    request<{ languages: { code: string; name: string; voice: string }[] }>("/api/languages"),
+
   listAvatars: () => request<{ avatars: Avatar[] }>("/api/avatars"),
 
   readAvatar: (id: string) => request<Avatar>(`/api/avatars/${id}`),

@@ -17,6 +17,7 @@ from avatar.gateway.models import Avatar, ConsentRecord, ConsentStatus, PhotoSet
 from avatar.gateway.tenancy import TenantError, assert_owned, owned_query
 from avatar.persona import InvalidProfile, persona_from_avatar
 from avatar.safety.crisis_lines import UnsupportedCountry, parse_attested, selectable
+from avatar.services.voices import UnsupportedLocale, supported
 
 
 class AvatarInput(BaseModel):
@@ -51,7 +52,7 @@ def _describe(avatar: Avatar, attested: frozenset[str]) -> dict:
         disclosure = persona.disclosure
         crisis = {"name": persona.crisis_line.name, "number": persona.crisis_line.number}
         usable = True
-    except (InvalidProfile, UnsupportedCountry) as exc:
+    except (InvalidProfile, UnsupportedCountry, UnsupportedLocale) as exc:
         disclosure, crisis, usable = str(exc), None, False
 
     return {
@@ -94,6 +95,21 @@ def build_router(settings, current_user, get_db) -> APIRouter:
             ]
         }
 
+    @router.get("/api/languages")
+    async def languages():
+        """Languages an avatar can speak.
+
+        Served rather than typed. A free-text language field is how an avatar
+        ends up recorded as "SPANISH", falling back to English prompts while a
+        Spanish voice reads them aloud.
+        """
+        return {
+            "languages": [
+                {"code": v.locale, "name": v.name, "voice": v.piper_voice}
+                for v in supported()
+            ]
+        }
+
     @router.post("/api/avatars", status_code=201)
     async def create(
         body: AvatarInput,
@@ -114,7 +130,7 @@ def build_router(settings, current_user, get_db) -> APIRouter:
         # spoken to is never created in the first place.
         try:
             persona_from_avatar(avatar, attested)
-        except (InvalidProfile, UnsupportedCountry) as exc:
+        except (InvalidProfile, UnsupportedCountry, UnsupportedLocale) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         db.add(avatar)
@@ -162,7 +178,7 @@ def build_router(settings, current_user, get_db) -> APIRouter:
 
         try:
             persona_from_avatar(avatar, attested)
-        except (InvalidProfile, UnsupportedCountry) as exc:
+        except (InvalidProfile, UnsupportedCountry, UnsupportedLocale) as exc:
             await db.rollback()
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

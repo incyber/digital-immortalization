@@ -14,6 +14,7 @@ import { api, ApiError, type Country } from "@/lib/gateway";
 export default function NewAvatar() {
   const router = useRouter();
   const [countries, setCountries] = useState<Country[]>([]);
+  const [languages, setLanguages] = useState<{ code: string; name: string }[]>([]);
   const [form, setForm] = useState({
     display_name: "",
     locale: "en",
@@ -28,8 +29,12 @@ export default function NewAvatar() {
   useEffect(() => {
     (async () => {
       try {
-        const list = (await api.countries()).countries;
+        const [list, langs] = await Promise.all([
+          api.countries().then((r) => r.countries),
+          api.languages().then((r) => r.languages),
+        ]);
         setCountries(list);
+        setLanguages(langs);
         if (list.length) {
           setForm((f) => ({ ...f, country: list[0].code, locale: list[0].locale }));
         }
@@ -134,14 +139,23 @@ export default function NewAvatar() {
 
           <label className="block space-y-1.5">
             <span className="text-sm text-neutral-400">Language</span>
-            <input
+            {/* A list, not a text box. Typing "SPANISH" here produced an
+                avatar that fell back to English prompts while a Spanish voice
+                read them aloud, which was unintelligible. */}
+            <select
               required
               value={form.locale}
               onChange={(e) => set("locale", e.target.value)}
               className={field}
-            />
+            >
+              {languages.map((l) => (
+                <option key={l.code} value={l.code} className="bg-neutral-900">
+                  {l.name}
+                </option>
+              ))}
+            </select>
             <span className="block text-xs text-neutral-500">
-              The language the avatar speaks.
+              What the avatar speaks, and the voice it speaks with.
             </span>
           </label>
         </div>

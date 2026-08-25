@@ -19,6 +19,7 @@ from pipecat.services.stt_service import STTService
 from pipecat.services.tts_service import TTSService
 
 from avatar.config import Settings
+from avatar.services.voices import voice_for
 
 
 def _language(code: str):
@@ -33,13 +34,17 @@ def _language(code: str):
         raise ValueError(f"unknown stt_language {code!r}") from exc
 
 
-def build_stt(cfg: Settings) -> STTService:
+def build_stt(cfg: Settings, locale: str | None = None) -> STTService:
     """Speech to text.
 
     mlx  - Whisper through MLX, which runs on the Metal GPU. The local default.
     faster - CTranslate2 Whisper. CPU or CUDA. The cloud default.
     """
-    language = _language(cfg.stt_language)
+    # The avatar's language, not a global setting: one deployment serves
+    # several languages at once and a single configured one is wrong for all
+    # but one of them.
+    code = voice_for(locale).whisper_language if locale else cfg.stt_language
+    language = _language(code)
 
     if cfg.stt_backend == "mlx":
         from pipecat.services.whisper.stt import WhisperSTTServiceMLX
@@ -54,7 +59,7 @@ def build_stt(cfg: Settings) -> STTService:
     raise ValueError(f"unknown stt_backend {cfg.stt_backend!r}; expected 'mlx' or 'faster'")
 
 
-def build_tts(cfg: Settings) -> TTSService:
+def build_tts(cfg: Settings, locale: str | None = None) -> TTSService:
     """Text to speech.
 
     Piper: small, fast on CPU, and cross-platform, so local and cloud sound
@@ -76,13 +81,17 @@ def build_tts(cfg: Settings) -> TTSService:
     of a specific person rather than a stock voice. Both satisfy Pipecat's
     TTSService contract, so that swap touches this function and nothing else.
     """
+    # A voice that does not match the text is worse than no voice: Spanish
+    # phonemes over English spelling is not a language anybody can follow.
+    piper_voice = voice_for(locale).piper_voice if locale else cfg.tts_voice
+
     if cfg.tts_backend == "http":
         # aiohttp session is owned by the service and closed with it.
         session = aiohttp.ClientSession()
         return PiperHttpTTSService(
             base_url=cfg.tts_url,
             aiohttp_session=session,
-            settings=PiperHttpTTSService.Settings(voice=cfg.tts_voice),
+            settings=PiperHttpTTSService.Settings(voice=piper_voice),
         )
 
     if cfg.tts_backend == "inprocess":
@@ -91,7 +100,7 @@ def build_tts(cfg: Settings) -> TTSService:
         from pipecat.services.piper.tts import PiperTTSService
 
         return PiperTTSService(
-            settings=PiperTTSService.Settings(voice=cfg.tts_voice),
+            settings=PiperTTSService.Settings(voice=piper_voice),
             download_dir=Path(cfg.voices_dir),
         )
 
