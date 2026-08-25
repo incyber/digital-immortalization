@@ -1,5 +1,12 @@
 # LivePortrait: photographs in, a base video with real head motion out.
 #
+# REQUIRES A GPU. Measured on this project: a 640x360 source with a
+# two-second motion template exceeded ten minutes on CPU across sixteen cores.
+# That is not slow, it is unusable, and no amount of downscaling changes it -
+# the model runs per frame regardless of source resolution. The
+# --flag_force_cpu path exists so the image starts and can be wired up on a
+# developer machine, not so it can produce output there.
+#
 # Two deliberate choices.
 #
 # The InsightFace detection models are never downloaded. LivePortrait's own
@@ -28,8 +35,11 @@ RUN git clone --depth 1 --branch ${LIVEPORTRAIT_REF} \
 
 WORKDIR /opt/LivePortrait
 
-RUN pip install --no-cache-dir \
-      torch torchvision --index-url https://download.pytorch.org/whl/cpu \
+# torch from PyPI rather than the CPU index. --index-url replaces PyPI
+# entirely, so build dependencies such as flit_core become unresolvable. On
+# arm64 there is no CUDA build published, so PyPI already gives the CPU wheel;
+# on the amd64 GPU box the same line gives the CUDA build.
+RUN pip install --no-cache-dir torch torchvision \
  && pip install --no-cache-dir -r requirements_base.txt \
  && pip install --no-cache-dir \
       onnxruntime \
@@ -44,6 +54,10 @@ COPY server.py /opt/LivePortrait/server.py
 # Rewrites the cropper to use the shim, at build time so a broken patch fails
 # the build rather than the first request.
 RUN python patch_cropper.py && python -c "import ast,sys; ast.parse(open('src/utils/cropper.py').read())"
+
+# The 631MB of weights are volume-mounted straight onto the path LivePortrait
+# resolves, rather than living in the image. Mounted rather than symlinked
+# from elsewhere: the indirection silently failed to resolve.
 
 ENV FACE_SERVICE_URL=http://facegeom:7001 \
     PYTHONUNBUFFERED=1

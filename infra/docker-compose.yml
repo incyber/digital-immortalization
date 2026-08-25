@@ -53,6 +53,28 @@ services:
       - "7001:7001"
     restart: unless-stopped
 
+  # LivePortrait: a photograph becomes a short clip of that person with real
+  # head motion and blinks. Needs a GPU - CPU inference exceeded ten minutes
+  # for two seconds of output, so this is started on demand rather than kept
+  # running locally. Driven by a motion template we generate, so no
+  # third party's mannerisms ship with the product. Only the six MIT weights
+  # are mounted - the restricted InsightFace models are not present, so the
+  # container cannot fall back to them.
+  liveportrait:
+    build: ./liveportrait
+    ports:
+      - "7002:7002"
+    volumes:
+      - ../assets/liveportrait:/opt/LivePortrait/pretrained_weights:ro
+      - ../assets/liveportrait/driving:/driving:ro
+    environment:
+      FACE_SERVICE_URL: http://facegeom:7001
+      LP_WEIGHTS: /opt/LivePortrait/pretrained_weights
+      LP_DRIVING: /driving/idle.pkl
+    depends_on:
+      - facegeom
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     ports:

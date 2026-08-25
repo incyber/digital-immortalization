@@ -23,12 +23,33 @@ from fastapi.responses import FileResponse
 
 sys.path.insert(0, "/opt/LivePortrait")
 
-WEIGHTS = Path(os.environ.get("LP_WEIGHTS", "/weights"))
-DRIVING = Path(os.environ.get("LP_DRIVING", "/driving/idle.mp4"))
+WEIGHTS = Path(os.environ.get("LP_WEIGHTS", "/opt/LivePortrait/pretrained_weights"))
+# A motion template (.pkl), not a video. See ingest/idle_motion.py: an
+# extracted clip would make every avatar move like the same stranger.
+DRIVING = Path(os.environ.get("LP_DRIVING", "/driving/idle.pkl"))
 OUTPUT_DIR = Path(tempfile.gettempdir()) / "liveportrait"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Long edge the source is reduced to before inference.
+MAX_SOURCE_EDGE = 1024
+
 app = FastAPI(title="LivePortrait")
+
+
+def _limit_resolution(path: Path, max_edge: int) -> None:
+    import cv2
+
+    image = cv2.imread(str(path))
+    if image is None:
+        return
+    height, width = image.shape[:2]
+    if max(height, width) <= max_edge:
+        return
+    scale = max_edge / max(height, width)
+    resized = cv2.resize(
+        image, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA
+    )
+    cv2.imwrite(str(path), resized, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
 
 @app.get("/health")
@@ -70,6 +91,12 @@ async def animate(
 
     source = workdir / "source.jpg"
     source.write_bytes(await file.read())
+
+    # Downscaled before inference. LivePortrait crops the face to 512 either
+    # way, but it composites the result back at the source resolution, so a
+    # 5MP phone photograph costs several minutes of pasting for detail that is
+    # discarded. 1024 on the long edge leaves the 512 crop oversampled.
+    _limit_resolution(source, MAX_SOURCE_EDGE)
 
     command = [
         sys.executable, "inference.py",
