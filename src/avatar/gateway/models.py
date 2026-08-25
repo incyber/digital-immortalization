@@ -11,7 +11,7 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -100,6 +100,97 @@ class ConsentRecord(Base):
     avatar: Mapped[Avatar] = relationship(back_populates="consent")
 
 
+class PhotoSetStatus(str, enum.Enum):
+    """A photo set's progress from upload to a trained likeness."""
+
+    UPLOADING = "uploading"
+    READY = "ready"          # passed validation, awaiting training
+    REJECTED = "rejected"    # failed validation; the customer must add more
+    TRAINING = "training"
+    TRAINED = "trained"
+    FAILED = "failed"
+
+
+class PhotoSet(Base):
+    """One batch of photographs uploaded to build one avatar.
+
+    Carries owner_id directly rather than only through the avatar, because it
+    exists before an avatar does and must still be tenant-scoped while it is
+    being uploaded.
+    """
+
+    __tablename__ = "photo_sets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    avatar_id: Mapped[str | None] = mapped_column(
+        ForeignKey("avatars.id"), nullable=True, index=True
+    )
+    status: Mapped[PhotoSetStatus] = mapped_column(
+        Enum(PhotoSetStatus, native_enum=False, values_callable=lambda e: [m.value for m in e]),
+        default=PhotoSetStatus.UPLOADING,
+        index=True,
+    )
+    usable_count: Mapped[int] = mapped_column(Integer, default=0)
+    half_body_count: Mapped[int] = mapped_column(Integer, default=0)
+    problems: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Photo(Base):
+    """One uploaded image and what validation made of it."""
+
+    __tablename__ = "photos"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    photo_set_id: Mapped[str] = mapped_column(ForeignKey("photo_sets.id"), index=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    # Storage key, always inside the owner's prefix. See storage/keys.py.
+    blob_key: Mapped[str] = mapped_column(String(512))
+    filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    accepted: Mapped[bool] = mapped_column(default=False)
+    rejection_reasons: Mapped[str | None] = mapped_column(Text, nullable=True)
+    face_height_fraction: Mapped[float] = mapped_column(Float, default=0.0)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class TrainingStatus(str, enum.Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class TrainingJob(Base):
+    """One identity-training run over a photo set.
+
+    Kept as a row rather than only in the job runner so that a customer can be
+    told what is happening after they close the tab, and so a crashed runner
+    leaves evidence rather than a silently stuck avatar.
+    """
+
+    __tablename__ = "training_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    photo_set_id: Mapped[str] = mapped_column(ForeignKey("photo_sets.id"), index=True)
+    status: Mapped[TrainingStatus] = mapped_column(
+        Enum(TrainingStatus, native_enum=False, values_callable=lambda e: [m.value for m in e]),
+        default=TrainingStatus.QUEUED,
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(64), default="local")
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    output_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Session(Base):
     __tablename__ = "sessions"
 
@@ -117,6 +208,7 @@ class SceneObservation(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), index=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(128))
@@ -130,6 +222,7 @@ class SafetyEvent(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), index=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     matched_term: Mapped[str] = mapped_column(String(128))
     locale: Mapped[str] = mapped_column(String(8))
     transcript_excerpt: Mapped[str] = mapped_column(Text)

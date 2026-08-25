@@ -53,3 +53,47 @@ async def test_consent_alone_does_not_grant_access(db, other_owner, avatar):
     await set_status(db, avatar, "verified")
     with pytest.raises(TenantError):
         await assert_owned(db, avatar.id, other_owner.id)
+
+
+async def test_every_tenant_scoped_model_can_actually_be_scoped(db, owner):
+    # owned_query raises for a model with neither owner_id nor avatar_id.
+    # Running it over every table is how a future model that forgets tenancy
+    # gets caught here rather than in production.
+    from avatar.gateway.models import (
+        Avatar,
+        ConsentRecord,
+        Photo,
+        PhotoSet,
+        SafetyEvent,
+        Session,
+        TrainingJob,
+    )
+
+    for model in (Avatar, ConsentRecord, PhotoSet, Photo, TrainingJob, Session, SafetyEvent):
+        query = owned_query(model, owner.id)
+        await db.execute(query)  # must build and run without error
+
+
+async def test_no_table_holding_tenant_data_is_unscopable():
+    """Every mapped table must be reachable by exactly one tenant.
+
+    A table with neither owner_id nor avatar_id cannot be filtered, so any
+    query over it returns every tenant's rows. Catching that here is the
+    difference between a design rule and a comment nobody reads.
+    """
+    from avatar.gateway.models import Base, User
+
+    # Users are the tenant, so they are scoped by identity rather than by a
+    # foreign key to themselves.
+    exempt = {User.__tablename__}
+
+    unscopable = [
+        mapper.class_.__name__
+        for mapper in Base.registry.mappers
+        if mapper.class_.__tablename__ not in exempt
+        and not hasattr(mapper.class_, "owner_id")
+        and not hasattr(mapper.class_, "avatar_id")
+    ]
+    assert unscopable == [], (
+        f"these tables hold tenant data but cannot be scoped to a tenant: {unscopable}"
+    )

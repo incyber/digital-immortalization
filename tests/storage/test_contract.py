@@ -7,6 +7,7 @@ tests, because that is the property worth guaranteeing across backends.
 
 import pytest
 
+from avatar.storage.base import StorageError
 from avatar.storage.keys import KeyError_, photo_key
 from avatar.storage.local import LocalBlobStore
 
@@ -27,21 +28,21 @@ async def test_put_then_get(store):
 async def test_another_tenant_cannot_read_it(store):
     key = photo_key(A, "set-1", "one.jpg")
     await store.put(A, key, b"secret", "image/jpeg")
-    with pytest.raises(Exception):
+    with pytest.raises(StorageError):
         await store.get(B, key)
 
 
 async def test_another_tenant_cannot_delete_it(store):
     key = photo_key(A, "set-1", "one.jpg")
     await store.put(A, key, b"secret", "image/jpeg")
-    with pytest.raises(Exception):
+    with pytest.raises(StorageError):
         await store.delete(B, key)
     assert await store.get(A, key) == b"secret"
 
 
 async def test_another_tenant_cannot_write_into_the_prefix(store):
     key = photo_key(A, "set-1", "one.jpg")
-    with pytest.raises(Exception):
+    with pytest.raises(StorageError):
         await store.put(B, key, b"planted", "image/jpeg")
 
 
@@ -54,7 +55,7 @@ async def test_listing_never_crosses_tenants(store):
 
 async def test_listing_a_foreign_prefix_is_refused(store):
     await store.put(B, photo_key(B, "set-1", "b.jpg"), b"b", "image/jpeg")
-    with pytest.raises(Exception):
+    with pytest.raises(StorageError):
         await store.list(A, f"tenants/{B}/")
 
 
@@ -69,7 +70,7 @@ async def test_delete_tenant_removes_only_that_tenant(store):
 
 
 async def test_missing_object_raises(store):
-    with pytest.raises(Exception):
+    with pytest.raises(StorageError, match="no object"):
         await store.get(A, photo_key(A, "set-1", "absent.jpg"))
 
 
@@ -83,5 +84,5 @@ async def test_upload_url_is_scoped_and_expiring(store):
     url = await store.upload_url(A, key, "image/jpeg")
     assert key in url
 
-    with pytest.raises(Exception):
+    with pytest.raises(StorageError):
         await store.upload_url(B, key, "image/jpeg")
