@@ -33,7 +33,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.livekit.transport import LiveKitParams, LiveKitTransport
 
 from avatar.config import Settings, get_settings
@@ -51,6 +50,7 @@ from avatar.renderer.plates import AvatarAssets, synthetic_assets
 from avatar.renderer.processor import RendererProcessor
 from avatar.renderer.viseme import VisemeRenderer
 from avatar.safety.processor import CrisisProcessor
+from avatar.services.llm_fallback import FallbackLLMService, build_providers
 from avatar.services.speech import build_stt, build_tts
 from avatar.vision.processor import VisionSampler
 from avatar.vision.state import SceneState
@@ -96,9 +96,9 @@ def build_pipeline(
 
     stt = build_stt(cfg)
     tts = build_tts(cfg)
-    llm = OpenAILLMService(
-        api_key=cfg.llm_api_key, base_url=cfg.llm_base_url, model=cfg.llm_model
-    )
+    # Falls through to the configured backup provider when the primary runs
+    # out of quota, rather than leaving somebody mid-conversation.
+    llm = FallbackLLMService(build_providers(cfg))
 
     context = LLMContext(
         messages=[{"role": "system", "content": build_system_prompt(profile, scene)}]

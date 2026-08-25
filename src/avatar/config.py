@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://localhost:11434/v1"
     llm_model: str = "llama3.2:3b"
     llm_api_key: str = "ollama"  # ignored by Ollama; required by the client
+    llm_provider_name: str = "ollama"
+
+    # Fallback language model, used when the primary runs out of quota
+    # mid-conversation. Any OpenAI-compatible endpoint works; the common ones:
+    #   Groq    https://api.groq.com/openai/v1
+    #   xAI     https://api.x.ai/v1
+    #   Gemini  https://generativelanguage.googleapis.com/v1beta/openai
+    # Left empty means no fallback rather than a broken one.
+    fallback_llm_provider_name: str = "groq"
+    fallback_llm_base_url: str = "https://api.groq.com/openai/v1"
+    fallback_llm_api_key: str = ""
+    fallback_llm_model: str = "llama-3.3-70b-versatile"
 
     # Vision model. Ollama's native endpoint, not the OpenAI shim, because the
     # shim's image handling varies by version.
