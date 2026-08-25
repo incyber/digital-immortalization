@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path("infra/liveportrait").resolve()))
 
-from facegeom_shim import (  # noqa: E402
+from facegeom_shim import (
     IF_LEFT_EYE,
     IF_LOWER_LIP,
     IF_RIGHT_EYE,
