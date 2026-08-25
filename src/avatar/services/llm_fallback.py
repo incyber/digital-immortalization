@@ -17,7 +17,7 @@ somebody else's quota to produce the same error more slowly.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 from loguru import logger
@@ -47,12 +47,20 @@ _QUOTA_MARKERS = (
 
 @dataclass(frozen=True)
 class Provider:
-    """One place to send a completion."""
+    """One place to send a completion.
+
+    extra_params are merged into every request to this provider and nowhere
+    else, because the useful knobs are not portable. Groq's gpt-oss models are
+    the case that forced it: without reasoning_effort="low" the hidden
+    reasoning consumes the whole token budget and content comes back empty -
+    which on a live call is the avatar silently saying nothing.
+    """
 
     name: str
     base_url: str
     api_key: str
     model: str
+    extra_params: dict = field(default_factory=dict)
 
     @property
     def usable(self) -> bool:
@@ -108,7 +116,7 @@ class FallbackLLMService(OpenAILLMService):
         super().__init__(
             api_key=primary.api_key,
             base_url=primary.base_url,
-            model=primary.model,
+            settings=OpenAILLMService.Settings(model=primary.model),
             **kwargs,
         )
         if len(usable) > 1:
@@ -134,6 +142,23 @@ class FallbackLLMService(OpenAILLMService):
         self._client = self.create_client(api_key=nxt.api_key, base_url=nxt.base_url)
         logger.warning(f"language model {previous.name} exhausted; switched to {nxt.name}")
         return True
+
+    def build_chat_completion_params(self, params_from_context) -> dict:
+        """Merge in whatever the current provider needs.
+
+        Applied per provider rather than globally: a parameter that is required
+        by one is often rejected outright by another.
+        """
+        params = super().build_chat_completion_params(params_from_context)
+
+        # The model is forced here rather than relied upon from the base
+        # class's settings. Switching provider updates the client, and the
+        # model name is held separately; when they disagreed, the backup was
+        # called with the primary's model name and answered 404. Setting it at
+        # the point of use removes the chance of them drifting apart at all.
+        params["model"] = self.current.model
+        params.update(self.current.extra_params)
+        return params
 
     async def get_chat_completions(self, context):
         """Try each remaining provider once.
@@ -182,7 +207,27 @@ def build_providers(cfg) -> list[Provider]:
                 base_url=cfg.fallback_llm_base_url,
                 api_key=cfg.fallback_llm_api_key,
                 model=cfg.fallback_llm_model,
+                extra_params=extra_params_for(cfg.fallback_llm_model),
             )
         )
 
     return providers
+
+
+# Reasoning models put their working out in a separate field and bill it
+# against the same token budget. Left at the default, a short reply is
+# truncated to nothing; some also emit <think> blocks inline, which the
+# text-to-speech stage would read aloud.
+_REASONING_MODEL_MARKERS = ("gpt-oss", "compound", "qwen3", "deepseek-r1", "o1", "o3")
+
+
+def extra_params_for(model: str) -> dict:
+    """Per-model request parameters, keyed off the model name.
+
+    Keyed off the name rather than configured because getting this wrong is
+    silent: the call simply produces no speech.
+    """
+    lowered = model.lower()
+    if any(marker in lowered for marker in _REASONING_MODEL_MARKERS):
+        return {"reasoning_effort": "low"}
+    return {}

@@ -169,3 +169,69 @@ def test_a_configured_fallback_is_included():
     providers = build_providers(cfg)
     assert len(providers) == 2
     assert providers[1].base_url.startswith("https://api.groq.com")
+
+
+def test_reasoning_models_get_their_effort_turned_down():
+    # Left at the default these return an empty content field, which on a live
+    # call is the avatar saying nothing at all.
+    from avatar.services.llm_fallback import extra_params_for
+
+    for model in ("openai/gpt-oss-120b", "groq/compound-mini", "qwen/qwen3.6-27b"):
+        assert extra_params_for(model) == {"reasoning_effort": "low"}
+
+
+def test_ordinary_models_get_no_extra_parameters():
+    # reasoning_effort is rejected outright by providers that do not know it.
+    from avatar.services.llm_fallback import extra_params_for
+
+    assert extra_params_for("llama3.2:3b") == {}
+    assert extra_params_for("gemini-2.5-flash") == {}
+
+
+def test_extra_params_follow_the_active_provider():
+    plain = Provider("plain", "https://a.test/v1", "k", "llama3.2:3b")
+    reasoning = Provider(
+        "reasoning", "https://b.test/v1", "k", "openai/gpt-oss-120b",
+        extra_params={"reasoning_effort": "low"},
+    )
+    service = FallbackLLMService([plain, reasoning])
+
+    # The base builder reads real invocation params; only the merge is under
+    # test here, so it is stubbed out.
+    from pipecat.services.openai.llm import BaseOpenAILLMService
+
+    original = BaseOpenAILLMService.build_chat_completion_params
+    BaseOpenAILLMService.build_chat_completion_params = lambda self, p: {"model": "x"}
+    try:
+        assert "reasoning_effort" not in service.build_chat_completion_params(None)
+        service._advance()
+        assert service.build_chat_completion_params(None)["reasoning_effort"] == "low"
+    finally:
+        BaseOpenAILLMService.build_chat_completion_params = original
+
+
+def test_the_configured_default_fallback_model_exists_in_config():
+    cfg = Settings(_env_file=None, fallback_llm_api_key="gsk_x")
+    provider = build_providers(cfg)[1]
+    assert provider.model == "openai/gpt-oss-120b"
+    assert provider.extra_params == {"reasoning_effort": "low"}
+
+
+def test_the_request_carries_the_active_providers_model():
+    # The failure this prevents: the client switches to the backup but the
+    # model name does not, so the backup is asked for a model it has never
+    # heard of and answers 404.
+    plain = Provider("primary", "https://a.test/v1", "k", "llama3.2:3b")
+    backup = Provider("backup", "https://b.test/v1", "k", "openai/gpt-oss-120b")
+    service = FallbackLLMService([plain, backup])
+
+    from pipecat.services.openai.llm import BaseOpenAILLMService
+
+    original = BaseOpenAILLMService.build_chat_completion_params
+    BaseOpenAILLMService.build_chat_completion_params = lambda self, p: {"model": "stale"}
+    try:
+        assert service.build_chat_completion_params(None)["model"] == "llama3.2:3b"
+        service._advance()
+        assert service.build_chat_completion_params(None)["model"] == "openai/gpt-oss-120b"
+    finally:
+        BaseOpenAILLMService.build_chat_completion_params = original

@@ -36,7 +36,12 @@ class Settings(BaseSettings):
     fallback_llm_provider_name: str = "groq"
     fallback_llm_base_url: str = "https://api.groq.com/openai/v1"
     fallback_llm_api_key: str = ""
-    fallback_llm_model: str = "llama-3.3-70b-versatile"
+    # Measured against Groq's catalogue on 2026-08-24: llama-3.3-70b-versatile
+    # has been retired, the qwen3 model leaks <think> blocks into content, and
+    # groq/compound routes onto gpt-oss-120b so it shares its rate limit
+    # without adding anything. gpt-oss-120b answers Spanish in persona in
+    # ~0.6s provided reasoning_effort is turned down.
+    fallback_llm_model: str = "openai/gpt-oss-120b"
 
     # Vision model. Ollama's native endpoint, not the OpenAI shim, because the
     # shim's image handling varies by version.
