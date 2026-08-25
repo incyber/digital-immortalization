@@ -76,6 +76,15 @@ def asset_key(tenant_id: str, avatar_id: str, filename: str) -> str:
     return f"{tenant_prefix(tenant_id)}avatars/{_check_id(avatar_id, 'avatar id')}/{filename}"
 
 
+def voice_key(tenant_id: str, avatar_id: str) -> str:
+    """Where an avatar's voice reference lives.
+
+    One per avatar, overwritten rather than versioned: a family replacing the
+    recording means the first one was wrong, and keeping it serves nobody.
+    """
+    return f"{tenant_prefix(tenant_id)}avatars/{_check_id(avatar_id, 'avatar id')}/voice.wav"
+
+
 def belongs_to(key: str, tenant_id: str) -> bool:
     """Whether a key lies inside a tenant's prefix.
 

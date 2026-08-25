@@ -255,3 +255,97 @@ async def test_a_stranger_cannot_self_attest_on_your_avatar(client):
         },
     )
     assert response.status_code == 404
+
+
+def a_recording(seconds=15.0, rate=24000, volume="0.5"):
+    import subprocess
+
+    return subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-f", "lavfi",
+            "-i", f"sine=frequency=180:duration={seconds}:sample_rate={rate}",
+            "-af", f"volume={volume}", "-f", "wav", "-",
+        ],
+        capture_output=True, check=False,
+    ).stdout
+
+
+async def test_a_usable_recording_is_accepted(client):
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/voice",
+        files={"file": ("voice.wav", a_recording(), "audio/wav")},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["seconds"] > 10
+    assert body["quality"] in {"usable", "good"}
+
+
+async def test_the_avatar_reports_having_a_voice(client):
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    assert (await client.get(f"/api/avatars/{avatar_id}")).json()["has_voice"] is False
+
+    await client.post(
+        f"/api/avatars/{avatar_id}/voice",
+        files={"file": ("voice.wav", a_recording(), "audio/wav")},
+    )
+    assert (await client.get(f"/api/avatars/{avatar_id}")).json()["has_voice"] is True
+
+
+async def test_a_too_short_recording_is_refused_with_the_reason(client):
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/voice",
+        files={"file": ("voice.wav", a_recording(seconds=2), "audio/wav")},
+    )
+    assert response.status_code == 400
+    assert "four seconds" in response.json()["detail"]
+
+
+async def test_an_unsupported_type_is_refused(client):
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/voice",
+        files={"file": ("voice.txt", b"hello", "text/plain")},
+    )
+    assert response.status_code == 400
+
+
+async def test_another_tenant_cannot_attach_a_voice(client):
+    await sign_in(client, "owner@example.com")
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    await client.post("/api/auth/logout")
+    await sign_in(client, "stranger@example.com")
+
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/voice",
+        files={"file": ("voice.wav", a_recording(), "audio/wav")},
+    )
+    assert response.status_code == 404
+
+
+async def test_the_stored_voice_lands_in_the_owners_prefix(client):
+    import avatar.gateway.db as db_module
+    from avatar.gateway.models import Avatar
+    from sqlalchemy import select
+
+    await sign_in(client)
+    me = (await client.get("/api/me")).json()
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    await client.post(
+        f"/api/avatars/{avatar_id}/voice",
+        files={"file": ("voice.wav", a_recording(), "audio/wav")},
+    )
+
+    async with db_module._factory() as db:
+        avatar = (
+            await db.execute(select(Avatar).where(Avatar.id == avatar_id))
+        ).scalar_one()
+    assert avatar.voice_key.startswith(f"tenants/{me['id']}/")

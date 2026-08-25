@@ -86,6 +86,13 @@ class Avatar(Base):
     assets_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     framing: Mapped[str] = mapped_column(String(16), default="head")
 
+    # A recording of the person, used to clone their voice. Without it the
+    # recreation speaks in a stock voice, which is the wrong person rather
+    # than a lesser version of the right one.
+    voice_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    voice_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    voice_quality: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     owner: Mapped[User] = relationship(back_populates="avatars")

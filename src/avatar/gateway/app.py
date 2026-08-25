@@ -161,7 +161,7 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
             # the reason it cannot be called is permission they can act on.
             raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-    app.include_router(build_avatar_router(settings, current_user, get_db))
+    app.include_router(build_avatar_router(settings, current_user, get_db, store))
     app.include_router(
         build_router(settings, current_user, get_db, store, runner)
     )

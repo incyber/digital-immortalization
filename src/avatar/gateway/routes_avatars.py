@@ -8,16 +8,22 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from avatar.gateway.models import Avatar, ConsentRecord, ConsentStatus, PhotoSet
 from avatar.gateway.tenancy import TenantError, assert_owned, owned_query
+from avatar.ingest.voice import ACCEPTED_TYPES, inspect_voice, normalise
 from avatar.persona import InvalidProfile, persona_from_avatar
 from avatar.safety.crisis_lines import UnsupportedCountry, parse_attested, selectable
 from avatar.services.voices import UnsupportedLocale, supported
+from avatar.storage.keys import voice_key
+
+# Two minutes of audio at any sane bitrate. Past this something other than a
+# voice reference is being uploaded.
+MAX_VOICE_BYTES = 40 * 1024 * 1024
 
 
 class AvatarInput(BaseModel):
@@ -65,13 +71,15 @@ def _describe(avatar: Avatar, attested: frozenset[str]) -> dict:
         "boundaries": avatar.boundaries,
         "photo_set_id": avatar.photo_set_id,
         "has_assets": bool(avatar.assets_key),
+        "has_voice": bool(avatar.voice_key),
+        "voice_quality": avatar.voice_quality,
         "disclosure": disclosure,
         "crisis_line": crisis,
         "callable": usable and bool(avatar.assets_key),
     }
 
 
-def build_router(settings, current_user, get_db) -> APIRouter:
+def build_router(settings, current_user, get_db, store) -> APIRouter:
     router = APIRouter()
     attested = parse_attested(settings.crisis_lines_verified)
 
@@ -216,6 +224,56 @@ def build_router(settings, current_user, get_db) -> APIRouter:
         photo_set.avatar_id = avatar.id
         await db.commit()
         return _describe(avatar, attested)
+
+    @router.post("/api/avatars/{avatar_id}/voice", status_code=201)
+    async def upload_voice(
+        avatar_id: str,
+        file: UploadFile = File(...),  # noqa: B008
+        db: AsyncSession = Depends(get_db),  # noqa: B008
+        user_id: str = Depends(current_user),
+    ):
+        """Attach a recording of the person, for cloning their voice.
+
+        Checked and normalised here rather than at synthesis time, so a
+        customer learns their voicemail is too quiet while they can still look
+        for a better file.
+        """
+        try:
+            avatar = await assert_owned(db, avatar_id, user_id)
+        except TenantError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        if file.content_type not in ACCEPTED_TYPES:
+            raise HTTPException(
+                status_code=400, detail=f"unsupported audio type {file.content_type!r}"
+            )
+
+        data = await file.read()
+        if len(data) > MAX_VOICE_BYTES:
+            raise HTTPException(status_code=400, detail="that recording is too large")
+
+        verdict = inspect_voice(data)
+        if not verdict.usable:
+            raise HTTPException(
+                status_code=400,
+                detail="; ".join(p.value for p in verdict.problems),
+            )
+
+        stored = await store.put(
+            user_id, voice_key(user_id, avatar_id), normalise(data), "audio/wav"
+        )
+
+        avatar.voice_key = stored.key
+        avatar.voice_seconds = verdict.duration_s
+        avatar.voice_quality = verdict.quality
+        await db.commit()
+
+        return {
+            "avatar_id": avatar_id,
+            "seconds": round(verdict.duration_s, 1),
+            "sample_rate": verdict.sample_rate,
+            "quality": verdict.quality,
+        }
 
     @router.post("/api/avatars/{avatar_id}/consent", status_code=201)
     async def record_consent(
