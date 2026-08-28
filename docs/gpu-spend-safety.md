@@ -1,61 +1,124 @@
 # Not losing money on rented GPUs
 
-RunPod bills per second and does **not** stop idle pods. A forgotten pod costs
-about $281 a month for doing nothing. This is what stands between that and you.
+## The short version
 
-## The layers, weakest first
+GPU work runs on **RunPod Serverless**, where nothing is allocated between
+jobs. There is no pod to forget, so the entire class of "left running
+overnight" does not apply.
 
-Deliberately ordered this way: the layers I wrote are the weak ones, and they
-are not what the guarantee rests on.
+This replaced a Pod design that could not be made safe. An adversarial review
+found that two of its three claimed layers did not function at all.
 
-| # | Layer | Fails when |
+## What was wrong before, stated plainly
+
+The previous design was described in this file as layered protection with an
+in-pod deadman as "the first layer that does not depend on anything outside
+the pod." Verified against the code:
+
+| Claimed layer | Reality |
+|---|---|
+| `finally` teardown | Works, but only when the process survives. Fail-open. |
+| 30-minute wall-clock ceiling | **Never enforced.** `max_minutes` is read inside the `finally`, after the block returns. It logs a warning about a pod it has already released. |
+| In-pod deadman | **Never deployed.** No Dockerfile or compose file references `infra/deadman.sh`. It had a passing unit test and had never run in a pod. |
+| Prepaid balance | Real, and provider-enforced. |
+
+Two of the three were theatre. The ceiling could not stop a hang, and the
+deadman did not exist anywhere a pod would find it.
+
+The deeper problem was shape, not bugs. A Pod runs until something acts to
+stop it, so **every** failure - crashed orchestrator, slept laptop, dropped
+network, `SIGKILL` - leaves a GPU billing. Layering more watchdogs onto a
+fail-open design produces more things that can fail.
+
+## Why serverless removes the problem instead of guarding it
+
+Three guarantees, all enforced by RunPod, none dependent on this code being
+correct, running, or alive:
+
+| Setting | Value | What RunPod's documentation says |
 |---|---|---|
-| 1 | `finally` teardown in `rented_gpu` | the process is `SIGKILL`ed, the machine sleeps or dies |
-| 2 | `make gpu-stop`, tagged sweep | nobody runs it |
-| 3 | **In-pod deadman** — hard and idle ceilings | the pod itself is destroyed *(then there is no bill)* |
-| 4 | **Prepaid balance** | never — RunPod enforces it server-side |
+| `workersMin` | `0` | Active workers "incur charges continuously, including when idle". Zero means none are active. |
+| `idleTimeout` | `5s` (default) | A worker shuts down this long after finishing a request. |
+| `executionTimeout` | `900s` | "When exceeded, the job fails and the worker stops." |
+| `workersMax` | `1` | "Acts as a cost safety limit and concurrency cap." |
 
-Layer 3 is the first that does not depend on anything outside the pod.
-Layer 4 is the only one that is a guarantee, and it is not code.
+A hung job is killed by the platform. A crashed orchestrator leaves nothing
+running, because nothing was allocated in the first place. There is no
+create/terminate pair to half-complete.
 
-## Why layer 3 matters
+`assert_endpoint_is_safe()` reads these back from the platform rather than
+trusting what was sent at creation - the previous ceiling was also
+"configured", and never ran.
 
-Layers 1 and 2 share an assumption: something outside the pod is still alive
-and willing to stop it. That assumption is false exactly when it matters -
-the orchestrator crashed, the laptop slept, the network dropped.
+## What still requires a human
 
-The deadman runs *inside* the pod, so its liveness is the pod's liveness. Two
-independent triggers:
+1. **A dedicated RunPod account**, used for nothing else. Then everything is
+   scoped by account rather than by tags that can be missed.
+2. **Fund $5, not $10.** The balance is not a loss cap, it is a *leak timer*:
+   `balance ÷ hourly rate = worst-case leak duration`. At the verified L4 rate
+   of $0.44/hr, $5 is 11.4 hours.
+3. **Low-balance alert just below the funded amount** - fund $5, alert at $4.
+   This turns the balance from a cap that fires after the money is gone into a
+   detector that fires after about $1.
+4. **Auto-pay off, no saved card.** It reloads automatically and removes the
+   only guarantee on this page that does not depend on code.
+5. **Never use GraphQL `stopAfter` / `terminateAfter`.** They accept input,
+   return success, and do nothing. RunPod's own CLI removed the flags on
+   2026-08-27 for this reason, and their documentation still lists them.
 
-- **Hard ceiling** (default 30 min) - fires regardless of what the job is
-  doing. A job that outruns it has hung.
-- **Idle ceiling** (default 10 min) - the work touches a heartbeat file; if it
-  stops, the work is gone and the GPU is rented for nothing.
+## Verifying it yourself
 
-If it cannot reach the API it stops the container anyway. A stopped container
-is not a stopped pod, but it is a smaller bill and it makes the leak visible.
+Cheap, and worth doing before trusting any of the above.
 
-## What actually caps the loss
+- **V1, free.** Submit a job to an endpoint configured with
+  `executionTimeout` of 60s that sleeps for 300s. Observe the platform mark it
+  `TIMED_OUT` and the worker stop. Nothing in this repository participates.
+- **V2, free.** Submit a job, then `kill -9` the orchestrator. Observe that the
+  job still completes or times out on its own, and that no worker remains
+  afterwards. Under the Pod design this was the scenario that leaked.
+- **V3, free.** Set the low-balance threshold just under the current balance
+  and confirm the email reaches your phone. An untested alert is not an alert.
+- **V4, free.** Leave the endpoint idle overnight. Confirm the next day's
+  balance is unchanged.
 
-**RunPod is prepaid.** With auto-pay off, the balance is the maximum possible
-loss, enforced by RunPod rather than by anything here. Load $10 and the worst
-case - every layer above failing at once - is $10.
+## Residual exposure
 
-**Keep auto-pay off.** It reloads the balance automatically and removes the
-only real guarantee on this page.
+| Failure | Bounded by | Cost |
+|---|---|---|
+| Orchestrator dies mid-job | job runs to completion or `executionTimeout` | under $0.11 |
+| Job hangs | platform `executionTimeout` | $0.11 for 15 min |
+| Endpoint misconfigured with warm workers | `assert_endpoint_is_safe`, then the balance | up to the balance |
+| Auto-pay switched on | nothing | unbounded - do not do this |
 
-## Operating rules
+## What is not covered
 
-1. Load $10. Not more.
-2. Auto-pay **off**. Low-balance email alert on.
-3. `make gpu-status` shows what is billing right now.
-4. `make gpu-stop` terminates everything this project started, and is safe to
-   run at any time, including when nothing is running.
+A live call that must hold warm models across a multi-minute conversation
+cannot be request/response, and will need a Pod. That decision should be made
+when that renderer exists, with the pull-lease design below - not inherited by
+default.
+
+**The lease design, for when it is needed.** Invert the direction of authority.
+Today an orchestrator *pushes* a kill, so every delivery failure means the pod
+survives. Instead the pod should *pull* a renewable permission: a key in a
+store with a storage-enforced TTL, written by the orchestrator every 15
+seconds, read by an in-pod supervisor every 15 seconds. Missing, expired,
+unreadable, or a non-200 all count as denial. Three consecutive failures and
+the pod terminates itself. The supervisor must be PID 1 under
+`timeout -s KILL 1800`, so that its own death is container exit rather than a
+crashed watchdog. Renewal must come from outside the pod: a heartbeat written
+by the worker is fail-open, because a hung worker keeps writing it.
+
+One window remains genuinely fail-open even then - between pod creation and
+the supervisor arming, nothing is enforcing anything. It is closed only by
+pinning images by digest so a bad image fails before creation, and bounded by
+the balance.
 
 ## Honest limits
 
-- A pod started outside this code is not tagged and will not be swept.
-- If RunPod's API is down, nothing here can terminate anything; the deadman
-  falls back to stopping the container.
-- None of this protects against a mistake in a `gpu_type` that costs more per
-  hour than expected. The balance still does.
+- Revoking or rotating the API key disables the `finally`, the CLI, and any
+  in-pod termination **simultaneously**. It is a genuine common cause and no
+  layering removes it. Serverless is unaffected: there is nothing to terminate.
+- A pod created by hand is not tagged and will not be swept. A dedicated
+  account is the fix, not better tags.
+- RunPod's auto-stop at $0 has no documented grace period. Assume the balance
+  can go slightly negative.

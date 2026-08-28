@@ -1,4 +1,27 @@
-"""Renting a GPU, with teardown that cannot be forgotten.
+"""Pod-based GPU rental. NOT USED, AND NOT SAFE AS WRITTEN.
+
+Kept only because a live call holding warm models across a conversation will
+eventually need a Pod, and the lease design that would make one safe is
+documented in docs/gpu-spend-safety.md. Use gpu/serverless.py for everything
+else. An adversarial review found three defects here, all confirmed:
+
+  max_minutes is never enforced. It is read inside the finally, after the
+  block has returned, and logs a warning about a pod it has already released.
+  Any hang inside the block - such as waiting for a pod to become ready -
+  holds the GPU indefinitely.
+
+  infra/deadman.sh, described as the layer that does not depend on anything
+  outside the pod, is referenced by no Dockerfile and no compose file. It has
+  a passing unit test and has never run in a pod.
+
+  The whole shape is fail-open: the pod runs until something acts to stop it,
+  so every failure leaves it billing.
+
+Do not enable this without implementing the pull-lease design first.
+
+Original docstring follows.
+
+Renting a GPU, with teardown that cannot be forgotten.
 
 RunPod bills per second, which is cheap, but it does not stop idle pods. A pod
 left running overnight bills the full hourly rate for doing nothing, and the

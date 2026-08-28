@@ -103,14 +103,16 @@ class Settings(BaseSettings):
     # Face geometry service. See vision/faceclient.py for why it is a service.
     face_service_url: str = "http://localhost:7001"
 
-    # Rented GPU. Prepaid, so the account balance is the hard ceiling; keep
-    # auto-pay off and the worst case is the balance rather than a bill.
+    # GPU work runs on RunPod Serverless, where nothing is allocated between
+    # jobs. Pods were rejected: they run until something acts to stop them, so
+    # every failure leaves a GPU billing.
     runpod_api_key: str = ""
-    runpod_gpu_type: str = "NVIDIA L4"
-    runpod_cost_per_hour: float = 0.39
-    # Nothing should run this long. A job that does has hung, and the ceiling
-    # is what stops a hang becoming a monthly charge.
-    runpod_max_minutes: int = 30
+    runpod_endpoint_id: str = ""
+    # Verified L4 rate as of 2026-08-27. Community is $0.44, Secure $0.49 -
+    # the earlier $0.39 was wrong and understated a leak by about 12%.
+    runpod_cost_per_hour: float = 0.44
+    # The platform kills a job that exceeds this and stops the worker.
+    runpod_execution_timeout_s: int = 900
 
     # Signs session cookies. The default is obviously not a secret and is
     # rejected by assert_production_ready; set SESSION_SECRET in deployment.

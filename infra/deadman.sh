@@ -1,4 +1,12 @@
 #!/bin/sh
+# Deadman switch. NOT DEPLOYED - no Dockerfile or compose file references this.
+# It is a Pod-era component kept alongside gpu/runpod.py; serverless work needs
+# no deadman because nothing is allocated between jobs.
+#
+# Two fail-open defects found by review, unfixed because the file is unused:
+#   - a missing heartbeat file skips the idle check entirely and silently
+#   - set -eu means an interrupted sleep exits the script, leaving no watchdog
+#
 # Deadman switch. Runs inside the pod and terminates it from the inside.
 #
 # Every other safeguard in this project assumes some process outside the pod
