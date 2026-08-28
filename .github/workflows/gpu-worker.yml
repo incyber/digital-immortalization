@@ -12,6 +12,14 @@ name: gpu-worker
 on:
   workflow_dispatch:
     inputs:
+      image:
+        description: Which image to build
+        required: true
+        default: gpu-worker
+        type: choice
+        options:
+          - gpu-worker
+          - musetalk
       tag:
         description: Image tag to publish
         required: true
@@ -19,7 +27,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ${{ github.repository }}/gpu-worker
+  IMAGE: ${{ github.repository }}/${{ inputs.image }}
 
 jobs:
   build:
@@ -56,7 +64,7 @@ jobs:
           # face service and the LivePortrait patches from their existing
           # directories instead of keeping a second copy of either.
           context: infra
-          file: infra/serverless/Dockerfile
+          file: infra/${{ inputs.image == 'musetalk' && 'musetalk' || 'serverless' }}/Dockerfile
           platforms: linux/amd64
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ inputs.tag }}
