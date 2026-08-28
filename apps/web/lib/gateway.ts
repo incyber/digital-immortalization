@@ -165,6 +165,17 @@ export const api = {
     });
   },
 
+  // A clip is turned into frames on the server, each checked exactly as an
+  // uploaded photograph is, so this returns how many of them survived.
+  uploadVideo: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{ frames_examined: number; accepted: number; photos: PhotoVerdict[] }>(
+      `/api/photo-sets/${id}/video`,
+      { method: "POST", body: form },
+    );
+  },
+
   evaluate: (id: string) =>
     request<PhotoSet>(`/api/photo-sets/${id}/evaluate`, { method: "POST" }),
 

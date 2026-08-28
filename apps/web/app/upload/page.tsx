@@ -38,6 +38,8 @@ export default function Upload() {
   const [progress, setProgress] = useState(0);
   const [builtAvatarId, setBuiltAvatarId] = useState<string | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
+  const [videoStatus, setVideoStatus] = useState<string | null>(null);
+  const videoInput = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -91,6 +93,28 @@ export default function Upload() {
     } catch {
       // Leave the per-image verdicts standing; the explicit button remains.
     }
+  }
+
+  // A clip is usually a better source than an album: twenty seconds of someone
+  // talking holds more angles and mouth positions than most families have in
+  // stills. The server takes the frames, so this uploads once and waits.
+  async function onVideo(files: FileList | null) {
+    if (!files || !files.length || !setId) return;
+    setError(null);
+    setVideoStatus("Reading the clip. This takes a moment.");
+
+    try {
+      const result = await api.uploadVideo(setId, files[0]);
+      setVideoStatus(
+        `${result.accepted} usable of ${result.frames_examined} frames taken from the clip.`,
+      );
+      await refresh(setId);
+      setSet(await api.evaluate(setId));
+    } catch (e) {
+      setVideoStatus(null);
+      setError(e instanceof Error ? e.message : "Could not read that video");
+    }
+    if (videoInput.current) videoInput.current.value = "";
   }
 
   async function check() {
@@ -208,6 +232,33 @@ export default function Upload() {
           {uploading > 0 && (
             <p className="text-sm text-neutral-400">Checking {uploading} more…</p>
           )}
+
+          {/* A clip, as an alternative to an album. Offered second rather than
+              first only because people arrive with photographs in mind; it is
+              usually the better source. */}
+          <div className="rounded-lg border border-neutral-800 p-4">
+            <p className="mb-1 text-sm font-medium text-neutral-200">
+              Or upload a short video
+            </p>
+            <p className="mb-3 text-sm text-neutral-400">
+              Ten to thirty seconds of them talking, facing the camera. This
+              usually gives a better result than photographs, because it
+              contains their real movement and mouth shapes.
+            </p>
+            <input
+              ref={videoInput}
+              type="file"
+              accept="video/mp4,video/quicktime,video/webm,video/x-matroska"
+              onChange={(e) => onVideo(e.target.files)}
+              className="block w-full text-sm text-neutral-400
+                         file:mr-4 file:rounded-full file:border-0 file:bg-neutral-800
+                         file:px-5 file:py-2.5 file:font-medium file:text-neutral-100
+                         hover:file:bg-neutral-700"
+            />
+            {videoStatus && (
+              <p className="mt-3 text-sm text-neutral-300">{videoStatus}</p>
+            )}
+          </div>
           {error && (
             <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
               {error}
