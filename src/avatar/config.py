@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     # single short utterances.
     stt_language: str = "es"
     renderer_backend: str = "viseme"
+    # Where the live lip-sync service is reachable. Empty until a GPU pod is
+    # running; the viseme backend never reads it.
+    musetalk_url: str = ""
 
     # Piper voice. Downloaded once into voices_dir and cached there; the name
     # is a locale-qualified voice id from the rhasspy/piper-voices set.

@@ -13,12 +13,22 @@ def test_viseme_backend_is_the_local_default():
 
 
 def test_musetalk_backend_fails_loudly_rather_than_silently_downgrading():
-    # Selecting the GPU backend on a machine without one must be an error. A
+    # Selecting the GPU backend with no service to reach must be an error. A
     # paying customer silently served the stand-in avatar is worse than a
     # refused start.
-    cfg = Settings(_env_file=None, renderer_backend="musetalk")
-    with pytest.raises(NotImplementedError, match="sub-project 2"):
+    cfg = Settings(_env_file=None, renderer_backend="musetalk", musetalk_url="")
+    with pytest.raises(ValueError, match="no GPU service"):
         build_renderer(cfg)
+
+
+def test_musetalk_backend_is_built_when_a_service_is_configured():
+    cfg = Settings(
+        _env_file=None, renderer_backend="musetalk", musetalk_url="http://gpu:7100"
+    )
+    r = build_renderer(cfg)
+
+    assert r.size == (cfg.video_width, cfg.video_height)
+    assert r.fps == 25
 
 
 def test_unknown_backend_is_rejected():

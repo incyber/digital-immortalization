@@ -424,13 +424,19 @@ async def stream(websocket: WebSocket, avatar_id: str):
                 pending.extend(data)
             # A flush ends an utterance: render whatever is left rather than
             # holding it back until enough arrives to fill a whole chunk.
-            elif (
-                (text := message.get("text")) is not None
-                and pending
-                and json.loads(text).get("op") == "flush"
-            ):
-                await render_chunk(bytes(pending))
-                pending = bytearray()
+            elif (text := message.get("text")) is not None:
+                op = json.loads(text).get("op")
+                # A flush ends an utterance: render what is left rather than
+                # holding it back until enough arrives to fill a whole chunk.
+                if op == "flush" and pending:
+                    await render_chunk(bytes(pending))
+                    pending = bytearray()
+                # Barge-in. Everything already rendered is now wrong, because
+                # the words it was rendered for are no longer being said.
+                elif op == "cancel":
+                    pending = bytearray()
+                    while not rendered.empty():
+                        rendered.get_nowait()
 
     async def render_chunk(audio: bytes) -> None:
         nonlocal index

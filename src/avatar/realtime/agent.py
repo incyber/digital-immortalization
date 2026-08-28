@@ -59,13 +59,19 @@ from avatar.vision.state import SceneState
 def build_renderer(cfg: Settings, assets_path: str | None = None) -> RendererStage:
     """Pick a renderer backend.
 
-    musetalk arrives in sub-project 2 and satisfies the same contract tests as
-    the CPU backend, so nothing else in this file changes when it lands.
+    Both satisfy the same contract suite, so the call loop, turn timing and
+    barge-in are identical either way and only pixels differ.
     """
     if cfg.renderer_backend == "musetalk":
-        raise NotImplementedError(
-            "the MuseTalk backend is sub-project 2; it requires an NVIDIA GPU "
-            "and is not runnable on this machine"
+        from avatar.renderer.musetalk import MuseTalkRenderer
+
+        if not cfg.musetalk_url:
+            raise ValueError(
+                "renderer_backend is musetalk but musetalk_url is not set; "
+                "there is no GPU service to talk to"
+            )
+        return MuseTalkRenderer(
+            cfg.musetalk_url, size=(cfg.video_width, cfg.video_height)
         )
 
     if cfg.renderer_backend != "viseme":
