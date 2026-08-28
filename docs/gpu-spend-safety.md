@@ -54,17 +54,45 @@ trusting what was sent at creation - the previous ceiling was also
 
 1. **A dedicated RunPod account**, used for nothing else. Then everything is
    scoped by account rather than by tags that can be missed.
-2. **Fund $5, not $10.** The balance is not a loss cap, it is a *leak timer*:
-   `balance ÷ hourly rate = worst-case leak duration`. At the verified L4 rate
-   of $0.44/hr, $5 is 11.4 hours.
-3. **Low-balance alert just below the funded amount** - fund $5, alert at $4.
-   This turns the balance from a cap that fires after the money is gone into a
-   detector that fires after about $1.
+2. **Fund as little as the work needs.** The balance is not a loss cap, it is a
+   *leak timer*: `balance / hourly rate = worst-case leak duration`. At the
+   verified L4 rate of $0.44/hr, $5 is 11.4 hours and $20 is 45 hours. The
+   account is funded at **$20**, so the timer is 45 hours rather than 11.
+3. **Low-balance alert just below the funded amount** - at $20 funded, alert at
+   $18. This turns the balance from a cap that fires after the money is gone
+   into a detector that fires after about $2. RunPod's default threshold is $5,
+   which on a $20 balance fires only after $15 is already spent.
 4. **Auto-pay off, no saved card.** It reloads automatically and removes the
    only guarantee on this page that does not depend on code.
 5. **Never use GraphQL `stopAfter` / `terminateAfter`.** They accept input,
    return success, and do nothing. RunPod's own CLI removed the flags on
    2026-08-27 for this reason, and their documentation still lists them.
+
+## Standing checks
+
+Two commands, neither of which trusts the application's own record.
+
+    make endpoint-verify    re-read the four settings from the platform
+    make gpu-status         what exists on the account right now
+
+`endpoint-verify` exits non-zero when any of `workersMin`, `workersMax`,
+`idleTimeout` or `executionTimeoutMs` is wrong. Worth running on its own rather
+than only at creation: provisioning checks the settings once, but a console
+click can change `workersMin` afterwards and nothing in the application would
+notice.
+
+`gpu-status` lists serverless endpoints and flags any with `workersMin` above
+zero, which is the only setting that bills with no job running. It also reports
+pods - and since this project uses serverless, **a pod appearing there is a
+finding, not a reading**.
+
+Account state at the time of writing: balance $20.00, zero endpoints, zero
+pods, $0.00/hr.
+
+One correction worth recording. `balance()` previously called
+`GET /v1/billing/balance`, which returns 400 - *"that path ... does not
+exist"*. The number the whole spend argument rests on was never being read. It
+now goes through GraphQL `myself { clientBalance }`.
 
 ## Verifying it yourself
 
@@ -87,7 +115,7 @@ Cheap, and worth doing before trusting any of the above.
 |---|---|---|
 | Orchestrator dies mid-job | job runs to completion or `executionTimeout` | under $0.11 |
 | Job hangs | platform `executionTimeout` | $0.11 for 15 min |
-| Endpoint misconfigured with warm workers | `assert_endpoint_is_safe`, then the balance | up to the balance |
+| Endpoint misconfigured with warm workers | `assert_endpoint_is_safe` at creation deletes it; `make endpoint-verify` catches a later change; then the balance | up to the balance |
 | Auto-pay switched on | nothing | unbounded - do not do this |
 
 ## What is not covered
