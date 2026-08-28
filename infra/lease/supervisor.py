@@ -42,8 +42,13 @@ CHECK_SECONDS = 15
 # shorter than a leak that matters.
 MAX_DENIALS = 3
 
-# Absolute ceiling regardless of the lease, applied by the runner rather than
-# by this process. See the Dockerfile's `timeout -s KILL`.
+# An absolute ceiling, independent of the lease. A renewal loop that keeps
+# working forever is not a failure this catches, so it is caught here instead:
+# no call runs for four hours, and a pod that has been up that long is wrong
+# whatever the lease says. The Dockerfile wraps this process in `timeout` as
+# well, so the ceiling survives this loop breaking.
+MAX_LIFETIME_S = int(os.environ.get("POD_MAX_LIFETIME_S", str(4 * 60 * 60)))
+
 POD_ID = os.environ.get("RUNPOD_POD_ID", "")
 LEASE_KEY = os.environ.get("LEASE_KEY", f"lease:pod:{POD_ID}")
 REDIS_URL = os.environ.get("REDIS_URL", "")
@@ -113,9 +118,16 @@ def main() -> int:
     service = subprocess.Popen(SERVICE.split())
 
     denials = 0
+    started = time.monotonic()
     try:
         while True:
             time.sleep(CHECK_SECONDS)
+
+            if time.monotonic() - started > MAX_LIFETIME_S:
+                log(f"pod has been up {MAX_LIFETIME_S}s; stopping regardless of the lease")
+                service.send_signal(signal.SIGKILL)
+                terminate_pod()
+                return 6
 
             if (code := service.poll()) is not None:
                 log(f"service exited with {code}; stopping the pod")

@@ -48,7 +48,7 @@ RUN pip install --no-cache-dir \
       "numpy<2" "opencv-python-headless>=4.10,<5" soundfile librosa einops \
       omegaconf "huggingface_hub>=0.30" \
       "fastapi>=0.115" "uvicorn[standard]>=0.34" "python-multipart>=0.0.20" \
-      websockets requests
+      websockets requests redis httpx
 
 # Weights land under /opt/MuseTalk/models because upstream resolves several of
 # them relative to the working directory: the VAE joins "models" with its type,
@@ -78,10 +78,17 @@ RUN mkdir -p /models && curl -sSL -o /models/face_landmarker.task \
       "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 
 COPY musetalk/server.py musetalk/bbox.py /opt/MuseTalk/
+COPY lease/supervisor.py /opt/supervisor.py
 
 ENV FACE_MODEL_PATH=/models/face_landmarker.task \
     FACE_SERVICE_URL=http://127.0.0.1:7001 \
     MUSETALK_AVATARS=/avatars
 
 EXPOSE 7100
-CMD ["python", "-u", "server.py"]
+
+# The supervisor is PID 1 and the service is its child, so a crashed watchdog
+# kills the container instead of outliving it. `timeout` wraps it as a second,
+# dumber ceiling: if the supervisor's own loop ever stops running, this still
+# ends the pod.
+ENV LEASE_SERVICE_CMD="python -u server.py"
+CMD ["timeout", "-s", "KILL", "18000", "python", "-u", "/opt/supervisor.py"]
