@@ -20,6 +20,7 @@ on:
         options:
           - gpu-worker
           - musetalk
+          - probe
       tag:
         description: Image tag to publish
         required: true
@@ -64,7 +65,7 @@ jobs:
           # face service and the LivePortrait patches from their existing
           # directories instead of keeping a second copy of either.
           context: infra
-          file: infra/${{ inputs.image == 'musetalk' && 'musetalk' || 'serverless' }}/Dockerfile
+          file: infra/${{ inputs.image == 'gpu-worker' && 'serverless' || inputs.image }}/Dockerfile
           platforms: linux/amd64
           push: true
           # A plain single-platform manifest, not an OCI index. buildx defaults
