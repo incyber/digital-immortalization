@@ -44,7 +44,12 @@ DEFAULT_GPU_TYPES = ("NVIDIA L4", "NVIDIA RTX A5000")
 # Weights are baked into the image, so the container needs room for the image
 # rather than for downloads. No volume is attached: a network volume is a
 # separate ongoing charge and nothing here needs to persist between jobs.
-DEFAULT_CONTAINER_DISK_GB = 40
+#
+# 90GB, from measurement rather than estimate. The image is 11.5GB compressed
+# across 28 layers and roughly 28GB unpacked, and a pull holds both at once -
+# about 40GB at peak. The first endpoint was given exactly 40GB and its worker
+# sat in `initializing` for eighteen minutes without ever becoming ready.
+DEFAULT_CONTAINER_DISK_GB = 90
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,15 @@ class Provisioner:
         all, and would also publish the customer-facing half of the product to
         anyone who guessed the name.
         """
+        # Reused by name if it already exists. Names are unique per account and
+        # the stored password is never readable back, so a second create with
+        # the same name returns a 500 rather than replacing it - which turned a
+        # routine re-provision into a failure.
+        for existing in self._request("GET", "/containerregistryauth"):
+            if existing.get("name") == name:
+                logger.info(f"reusing registry auth {existing['id']}")
+                return existing["id"]
+
         body = {"name": name, "username": username, "password": password}
         auth_id = self._request("POST", "/containerregistryauth", json=body).get("id")
         if not auth_id:
@@ -99,6 +113,26 @@ class Provisioner:
         registry_auth_id: str | None = None,
         env: dict[str, str] | None = None,
     ) -> str:
+        # Template names are unique per account, and re-provisioning after a
+        # failure is normal rather than exceptional. An identical template is
+        # reused instead of erroring; one that differs is a real conflict and
+        # is reported as such, because silently running on someone else's disk
+        # size is how the last failure happened.
+        for existing in self._request("GET", "/templates"):
+            if existing.get("name") != name:
+                continue
+            if (
+                existing.get("imageName") == image
+                and int(existing.get("containerDiskInGb") or 0) >= DEFAULT_CONTAINER_DISK_GB
+            ):
+                logger.info(f"reusing template {existing['id']}")
+                return existing["id"]
+            raise ServerlessError(
+                f"a template named {name!r} already exists with different settings "
+                f"({existing.get('imageName')}, {existing.get('containerDiskInGb')}GB); "
+                "delete it or choose another name"
+            )
+
         body: dict = {
             "name": name,
             "imageName": image,

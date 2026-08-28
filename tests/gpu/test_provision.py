@@ -19,12 +19,17 @@ SAFE = {
 }
 
 
+# Every provision starts by listing templates, because names are unique per
+# account and an identical one is reused rather than recreated.
+NO_EXISTING_TEMPLATES: list = []
+
+
 class FakeCalls(Provisioner):
     """Records requests and replays canned responses in order."""
 
     def __init__(self, responses):
         super().__init__("key")
-        self.responses = list(responses)
+        self.responses = [NO_EXISTING_TEMPLATES, *responses]
         self.calls = []
 
     def _request(self, method, path, **kwargs):
@@ -115,3 +120,39 @@ def test_a_serverless_template_exposes_no_ports():
 
     assert sent["ports"] == []
     assert sent["isServerless"] is True
+
+
+def test_an_identical_template_is_reused_rather_than_recreated():
+    """Re-provisioning after a failure is normal, and names are unique."""
+    existing = [
+        {
+            "id": "tpl-existing",
+            "name": "worker-template",
+            "imageName": "image",
+            "containerDiskInGb": 90,
+        }
+    ]
+    provisioner = FakeCalls([{"id": "ep-1"}, SAFE])
+    provisioner.responses[0] = existing
+
+    result = provisioner.provision("worker", "image")
+
+    assert result.template_id == "tpl-existing"
+    assert ("POST", "/templates") not in provisioner.calls
+
+
+def test_a_template_with_different_settings_is_a_conflict():
+    """Silently running on someone else's disk size is how the first one failed."""
+    existing = [
+        {
+            "id": "tpl-existing",
+            "name": "worker-template",
+            "imageName": "a-different-image",
+            "containerDiskInGb": 40,
+        }
+    ]
+    provisioner = FakeCalls([])
+    provisioner.responses[0] = existing
+
+    with pytest.raises(ServerlessError, match="different settings"):
+        provisioner.provision("worker", "image")
