@@ -1,5 +1,7 @@
 """Building renderable assets from real photographs."""
 
+import itertools
+
 import cv2
 import numpy as np
 import pytest
@@ -92,7 +94,7 @@ def test_plates_open_progressively():
     assert len(plates) == PLATE_COUNT
     brightness = [float(p.mean()) for p in plates]
     # Each step opens the mouth further, so the crop darkens monotonically.
-    assert all(b <= a + 1e-6 for a, b in zip(brightness, brightness[1:]))
+    assert all(b <= a + 1e-6 for a, b in itertools.pairwise(brightness))
     assert brightness[0] > brightness[-1]
 
 

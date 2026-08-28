@@ -5,6 +5,8 @@ not detect drawn faces, so anything routed through detection would prove
 nothing. See test_validate for that finding.
 """
 
+import itertools
+
 import cv2
 import numpy as np
 
@@ -43,7 +45,7 @@ def test_plates_open_progressively():
     """The renderer indexes by loudness, so the ordering is load-bearing."""
     plates = build_mouth_plates(a_mouth(), 6)
     brightness = [float(p.mean()) for p in plates]
-    assert all(b <= a + 1e-6 for a, b in zip(brightness, brightness[1:]))
+    assert all(b <= a + 1e-6 for a, b in itertools.pairwise(brightness))
     assert brightness[0] - brightness[-1] > 3.0
 
 

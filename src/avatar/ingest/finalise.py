@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from avatar.config import Settings
 from avatar.gateway.models import Avatar, Photo, PhotoSet
 from avatar.ingest.assets import build_avatar_assets
+from avatar.ingest.gpu_assets import attach_base_clip
 from avatar.ingest.validate import Framing
 from avatar.storage.base import BlobStore
 
@@ -97,6 +98,12 @@ async def finalise_avatar(
 
     destination = assets_dir_for(cfg, avatar.id)
     assets.save(destination)
+
+    # After the plate assets are saved, so a GPU outage costs the avatar its
+    # head motion rather than its existence. Returns None when no endpoint is
+    # configured, which is every developer machine.
+    if assets.base_rgb is not None:
+        attach_base_clip(cfg, destination, assets.base_rgb)
 
     avatar.assets_key = str(destination)
     avatar.framing = framing.value

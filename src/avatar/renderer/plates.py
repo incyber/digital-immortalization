@@ -53,6 +53,11 @@ class AvatarAssets:
     plates: list[np.ndarray]
     fps: int
     size: tuple[int, int]
+    # The un-swayed source frame the rest was derived from. Kept in memory for
+    # the GPU step, which needs the still rather than the synthetic loop, and
+    # deliberately not persisted: it is reproducible from the photo set and
+    # loading it back would double the size of every asset bundle.
+    base_rgb: np.ndarray | None = None
 
     def save(self, out_dir: Path) -> None:
         out_dir = Path(out_dir)

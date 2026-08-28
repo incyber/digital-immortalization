@@ -239,6 +239,7 @@ def build_avatar_assets(
     )
 
     return AvatarAssets(
+        base_rgb=base_rgb,
         idle_frames=build_idle_loop(base_rgb, fps, seconds),
         mouth_box=mouth_box,
         plates=build_plates(base_rgb, mouth_box),

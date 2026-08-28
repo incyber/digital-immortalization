@@ -102,10 +102,26 @@ class RunPodClient:
             return response.json() if response.content else {}
 
     def balance(self) -> float:
-        """Remaining prepaid credit, in dollars."""
+        """Remaining prepaid credit, in dollars.
+
+        Read over GraphQL. The REST API has no billing path - GET
+        /v1/billing/balance returns 400 with "that path ... does not exist" -
+        and the balance is the number the whole spend argument rests on, so it
+        is worth reading from somewhere that answers.
+
+        Returns -1.0 rather than raising. This is called by a tool whose job is
+        to report what is running; an unreadable balance should not stop it
+        printing the pods.
+        """
         try:
-            data = self._request("GET", "/billing/balance")
-            return float(data.get("currentBalance", data.get("balance", 0.0)))
+            with httpx.Client(timeout=self._timeout_s) as client:
+                response = client.post(
+                    "https://api.runpod.io/graphql",
+                    headers={"Authorization": f"Bearer {self._key}"},
+                    json={"query": "query { myself { clientBalance } }"},
+                )
+                response.raise_for_status()
+                return float(response.json()["data"]["myself"]["clientBalance"])
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"could not read balance: {exc}")
             return -1.0
