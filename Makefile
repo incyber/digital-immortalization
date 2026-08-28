@@ -17,6 +17,7 @@ infra-down:
 
 test:                   ## Unit and integration tests; no infrastructure needed
 	$(UV) run pytest -q
+	sh tests/gpu/test_deadman.sh
 
 test-e2e:               ## Real LiveKit and Ollama; requires make infra-up
 	AGENT_LOG=$${AGENT_LOG:-/tmp/avatar-agent.log} E2E=1 $(UV) run pytest tests/e2e -q
