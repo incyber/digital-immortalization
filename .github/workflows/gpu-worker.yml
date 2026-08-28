@@ -67,6 +67,13 @@ jobs:
           file: infra/${{ inputs.image == 'musetalk' && 'musetalk' || 'serverless' }}/Dockerfile
           platforms: linux/amd64
           push: true
+          # A plain single-platform manifest, not an OCI index. buildx defaults
+          # to attaching a provenance attestation, which turns the tag into an
+          # index holding the real image plus an "unknown/unknown" entry. Some
+          # runtimes pull that happily and some sit in `initializing` forever;
+          # nothing here needs the attestation.
+          provenance: false
+          sbom: false
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ inputs.tag }}
           # Layer cache in the registry. A one-line handler change then rebuilds
           # in minutes instead of refetching 2.6GB of weights.
