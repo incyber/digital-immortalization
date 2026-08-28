@@ -76,6 +76,21 @@ class Provisioner:
             return response.json() if response.content else {}
 
     # ------------------------------------------------------------------
+    def create_registry_auth(self, name: str, username: str, password: str) -> str:
+        """Store a read-only credential so RunPod can pull a private image.
+
+        The token behind this has read:packages and nothing else, which is why
+        the image can stay private. A public image would need no credential at
+        all, and would also publish the customer-facing half of the product to
+        anyone who guessed the name.
+        """
+        body = {"name": name, "username": username, "password": password}
+        auth_id = self._request("POST", "/containerregistryauth", json=body).get("id")
+        if not auth_id:
+            raise ServerlessError("registry auth creation returned no id")
+        logger.info(f"registry auth {auth_id} for {username}")
+        return auth_id
+
     def create_template(
         self,
         name: str,

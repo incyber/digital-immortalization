@@ -2,7 +2,7 @@
 # binary checked into .tools/ rather than installed on the host.
 UV := .tools/uv
 
-.PHONY: install infra-up infra-down test test-e2e latency consent gpu-status gpu-stop lint agent gateway web clean
+.PHONY: install infra-up infra-down test test-e2e latency consent gpu-status gpu-stop endpoint-create endpoint-verify lint agent gateway web clean
 
 install:                ## Resolve dependencies and install the package editable
 	$(UV) sync --extra dev
@@ -24,6 +24,12 @@ test-e2e:               ## Real LiveKit and Ollama; requires make infra-up
 
 latency:                ## Measure end of speech to first avatar audio
 	E2E=1 $(UV) run pytest tests/e2e/test_latency.py -q -s
+
+endpoint-create:        ## Create the serverless endpoint and verify what was stored
+	$(UV) run python -m avatar.cli.endpoint create
+
+endpoint-verify:        ## Re-read the endpoint settings and fail if unsafe
+	$(UV) run python -m avatar.cli.endpoint verify
 
 gpu-status:             ## What GPU is running and what it is costing
 	$(UV) run python -m avatar.cli.gpu status
