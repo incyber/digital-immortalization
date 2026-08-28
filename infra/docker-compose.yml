@@ -75,6 +75,22 @@ services:
       - facegeom
     restart: unless-stopped
 
+  # CosyVoice 2: the person's own voice, cloned from the reference recording.
+  # Self-hosted because hosted cloning services require the subject to record
+  # a consent statement, and a dead person cannot. Apache-2.0 on both code and
+  # weights.
+  cosyvoice:
+    build: ./cosyvoice
+    ports:
+      - "7003:7003"
+    volumes:
+      - ../assets/cosyvoice:/models:ro
+      - cosyvoice_refs:/references
+    environment:
+      COSY_MODEL_DIR: /models/CosyVoice2-0.5B
+      COSY_REFERENCES: /references
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     ports:
@@ -83,3 +99,4 @@ services:
 
 volumes:
   pgdata:
+  cosyvoice_refs:

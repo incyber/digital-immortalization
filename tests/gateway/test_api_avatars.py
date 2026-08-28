@@ -332,9 +332,10 @@ async def test_another_tenant_cannot_attach_a_voice(client):
 
 
 async def test_the_stored_voice_lands_in_the_owners_prefix(client):
+    from sqlalchemy import select
+
     import avatar.gateway.db as db_module
     from avatar.gateway.models import Avatar
-    from sqlalchemy import select
 
     await sign_in(client)
     me = (await client.get("/api/me")).json()
