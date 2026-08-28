@@ -31,6 +31,7 @@ from avatar.ingest.validate import (
     RECOMMENDED_MAX,
     RECOMMENDED_MIN,
 )
+from avatar.ingest.video import VideoError, extract_frames, is_video
 from avatar.training.base import JobState, TrainingRequest
 
 _STATE_TO_STATUS = {
@@ -135,6 +136,59 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
             "accepted": photo.accepted,
             "reasons": json.loads(photo.rejection_reasons) if photo.rejection_reasons else [],
             "half_body": 0.0 < photo.face_height_fraction < 0.33,
+        }
+
+    @router.post("/api/photo-sets/{photo_set_id}/video", status_code=201)
+    async def upload_video(
+        photo_set_id: str,
+        file: UploadFile = File(...),  # noqa: B008
+        db: AsyncSession = Depends(get_db),  # noqa: B008
+        user_id: str = Depends(current_user),
+    ):
+        """A clip in, frames added to the set as if each had been uploaded.
+
+        Every frame goes through the same checks as a photograph, so a clip and
+        an album are held to one standard and the caller reads one shape of
+        result either way.
+        """
+        data = await file.read()
+        if not is_video(file.content_type or "", file.filename or ""):
+            raise HTTPException(status_code=400, detail="that is not a video file")
+
+        try:
+            frames = extract_frames(data)
+        except VideoError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        added = []
+        for index, frame in enumerate(frames):
+            try:
+                photo = await add_photo(
+                    db, store, photo_set_id, user_id,
+                    f"frame-{index:04d}.jpg", "image/jpeg", frame,
+                )
+            except TenantError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError:
+                # One unusable frame is not a failed upload. A clip is expected
+                # to contain blinks, blur and turns away from camera; rejecting
+                # the whole video for them would reject every real video.
+                continue
+            added.append(
+                {
+                    "id": photo.id,
+                    "filename": photo.filename,
+                    "accepted": photo.accepted,
+                    "reasons": json.loads(photo.rejection_reasons)
+                    if photo.rejection_reasons
+                    else [],
+                }
+            )
+
+        return {
+            "frames_examined": len(frames),
+            "photos": added,
+            "accepted": sum(1 for p in added if p["accepted"]),
         }
 
     @router.post("/api/photo-sets/{photo_set_id}/evaluate")
