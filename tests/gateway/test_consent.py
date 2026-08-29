@@ -22,6 +22,22 @@ async def test_verified_status_passes(db, avatar):
     assert record.status is ConsentStatus.VERIFIED
 
 
+async def test_self_attested_status_also_passes(db, avatar):
+    # A self-attestation is a real, callable basis for a session even though
+    # it is not a reviewed verification - see routes_avatars.py.
+    await set_status(db, avatar, "self_attested")
+    record = await assert_consented(db, avatar.id)
+    assert record.status is ConsentStatus.SELF_ATTESTED
+
+
+async def test_self_attested_stays_distinguishable_from_verified(db, avatar):
+    # The gate treats the two statuses alike; nothing downstream is allowed
+    # to collapse them into the same value.
+    await set_status(db, avatar, "self_attested")
+    record = await assert_consented(db, avatar.id)
+    assert record.status is not ConsentStatus.VERIFIED
+
+
 async def test_missing_record_is_refused(db, avatar_without_consent):
     with pytest.raises(ConsentError, match="no consent record"):
         await assert_consented(db, avatar_without_consent.id)

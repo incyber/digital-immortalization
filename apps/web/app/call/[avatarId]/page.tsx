@@ -4,7 +4,14 @@
 //
 // The disclosure text comes from the server, generated from the avatar's name.
 // The client never composes it, so there is no version of this page that can
-// display a weaker one.
+// display a weaker one. The same is true of the second line: when a likeness
+// has been built, how much of it was generated rather than photographed is
+// the build's own sentence, passed through untouched.
+//
+// Which renderer draws the person is settled here, before any connection is
+// opened, and handed to the call surface already decided. Deciding late would
+// mean deciding during the call, and a picture that changed character halfway
+// through would be the loudest thing on the screen.
 //
 // The whole screen is dark in both appearances. A face on video belongs on
 // black, and this is not the moment to be adjusting to a white interface.
@@ -24,6 +31,7 @@ import {
   type Avatar,
   type SessionDetails,
 } from "@/lib/gateway";
+import { resolveLikeness, type LikenessPlan } from "@/lib/likeness";
 
 export default function Call() {
   const router = useRouter();
@@ -31,23 +39,39 @@ export default function Call() {
   const avatarId = params.avatarId;
 
   const [avatar, setAvatar] = useState<Avatar | null>(null);
+  const [likeness, setLikeness] = useState<LikenessPlan | null>(null);
   const [session, setSession] = useState<SessionDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refused, setRefused] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
       try {
-        setAvatar(await api.readAvatar(avatarId));
+        const loaded = await api.readAvatar(avatarId);
+        if (!cancelled) setAvatar(loaded);
       } catch (e: unknown) {
         if (e instanceof ApiError && e.status === 401) {
           router.replace("/signin");
           return;
         }
-        setError(e instanceof Error ? e.message : "Could not load this avatar");
+        if (!cancelled) setError(e instanceof Error ? e.message : "Could not load this avatar");
       }
     })();
+
+    // Runs alongside rather than after: it is a second small request, and
+    // nobody should wait longer to reach the button because of it. It never
+    // rejects — every reason a splat cannot be used comes back as the video
+    // track — so there is no failure branch to write here.
+    resolveLikeness(avatarId).then((plan) => {
+      if (!cancelled) setLikeness(plan);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [avatarId, router]);
 
   async function start() {
@@ -71,11 +95,14 @@ export default function Call() {
     <main className="always-dark flex h-dvh flex-col bg-surface text-label">
       {/* Outside the call surface, so it stays visible for the whole session
           rather than only before connecting. */}
-      <Disclosure text={avatar?.disclosure ?? "You are speaking with a synthetic recreation."} />
+      <Disclosure
+        text={avatar?.disclosure ?? "You are speaking with a synthetic recreation."}
+        detail={likeness?.splat?.disclosure}
+      />
 
       <div className="relative flex-1">
-        {session ? (
-          <CallStage session={session} onLeave={() => setSession(null)} />
+        {session && likeness ? (
+          <CallStage session={session} likeness={likeness} onLeave={() => setSession(null)} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-8 px-6 py-10">
             <div className="max-w-md text-center">
@@ -87,7 +114,10 @@ export default function Call() {
               </p>
             </div>
 
-            <Button rank="filled" onClick={start} disabled={connecting || !avatar}>
+            {/* The likeness decision gates the button as much as the avatar
+                does: starting before it has landed would connect the room and
+                only then discover what should be drawn in it. */}
+            <Button rank="filled" onClick={start} disabled={connecting || !avatar || !likeness}>
               {connecting ? "Connecting…" : "Start the call"}
             </Button>
 

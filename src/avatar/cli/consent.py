@@ -9,6 +9,13 @@ eventually be automated by whoever is in a hurry.
     python -m avatar.cli.consent verify <avatar-id> --reviewer "name" --note "what you saw"
     python -m avatar.cli.consent reject <avatar-id> --reviewer "name" --note "why"
     python -m avatar.cli.consent revoke <avatar-id> --note "who asked"
+
+Verifying with nothing on file in evidence_s3_key is refused by default - a
+verified record with no evidence behind it is indistinguishable from a
+properly evidenced one, which is the exact failure this module exists to
+prevent. Pass --force-without-evidence to override, and say in --note where
+the authorisation was actually seen; the override itself is written into the
+record's notes so it is visible to the next person who reads it.
 """
 
 from __future__ import annotations
@@ -55,17 +62,28 @@ async def cmd_list() -> None:
             )
 
 
-async def cmd_set(avatar_id: str, status: ConsentStatus, reviewer: str, note: str) -> None:
+async def cmd_set(
+    avatar_id: str, status: ConsentStatus, reviewer: str, note: str, force: bool = False
+) -> None:
     async with _factory()() as db:
         record = await _record(db, avatar_id)
 
         if status is ConsentStatus.VERIFIED and not record.evidence_s3_key:
             # A verified record with nothing behind it is the failure this
-            # command exists to prevent.
-            print(
-                "warning: no evidence document is on file for this avatar.\n"
-                "         Verify only if you have seen the authorisation elsewhere."
-            )
+            # command exists to prevent, so the default is refusal - not a
+            # warning that lets the operator carry on regardless, producing a
+            # record indistinguishable from one properly evidenced. --force
+            # exists for the case where the evidence really was seen
+            # elsewhere; using it is recorded in the note, not silent.
+            if not force:
+                raise SystemExit(
+                    "refusing: no evidence document is on file for this avatar.\n"
+                    "          Verifying somebody else's likeness with nothing behind it "
+                    "is the outcome this command exists to prevent.\n"
+                    "          Pass --force-without-evidence if the authorisation was seen "
+                    "elsewhere, and say where in --note."
+                )
+            note = f"[verified with --force-without-evidence, no evidence_s3_key on file] {note}"
 
         record.status = status
         record.verified_at = datetime.now(UTC)
@@ -91,6 +109,12 @@ def main() -> None:
         p.add_argument("avatar_id")
         p.add_argument("--reviewer", default="operator", help="who reviewed it")
         p.add_argument("--note", default="", help="what was seen, or why not")
+        p.add_argument(
+            "--force-without-evidence",
+            action="store_true",
+            help="verify with no evidence_s3_key on file; only relevant to 'verify', "
+            "and recorded in the note when used",
+        )
 
     args = parser.parse_args()
 
@@ -103,7 +127,9 @@ def main() -> None:
         "reject": ConsentStatus.REJECTED,
         "revoke": ConsentStatus.REVOKED,
     }[args.command]
-    asyncio.run(cmd_set(args.avatar_id, status, args.reviewer, args.note))
+    asyncio.run(
+        cmd_set(args.avatar_id, status, args.reviewer, args.note, args.force_without_evidence)
+    )
 
 
 if __name__ == "__main__":

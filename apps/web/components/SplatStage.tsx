@@ -33,6 +33,8 @@ export interface SplatStageProps {
   pose?: HeadPose;
   /** Where the camera sits relative to the subject. */
   framing?: CameraFraming;
+  /** Credential mode for the asset fetch. See SplatViewerOptions. */
+  credentials?: RequestCredentials;
   /**
    * Measured frame rate, reported roughly twice a second. This is the number
    * the device-side rendering decision turns on, so it is a first-class
@@ -50,6 +52,7 @@ export function SplatStage({
   url,
   pose,
   framing,
+  credentials = "omit",
   onFrameStats,
   onStatus,
   maxPixelRatio = 2,
@@ -105,6 +108,7 @@ export function SplatStage({
       pose: poseRef.current,
       framing: framingRef.current,
       maxPixelRatio,
+      credentials,
       onStatus: handleStatus,
       onFrameStats: handleFrameStats,
     });
@@ -114,7 +118,7 @@ export function SplatStage({
       viewerRef.current = null;
       viewer.dispose();
     };
-  }, [url, maxPixelRatio, handleStatus, handleFrameStats]);
+  }, [url, maxPixelRatio, credentials, handleStatus, handleFrameStats]);
 
   // Pose and framing are pushed imperatively. Routing them through the effect
   // that owns the viewer would tie a slider drag to a full reload. These stay

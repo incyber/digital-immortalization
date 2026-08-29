@@ -77,6 +77,13 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu12
 # has no GPU to detect: L4 is 8.9, A100 is 8.0, A10/A40 are 8.6, H100 is 9.0.
 ENV TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0" \
     MAX_JOBS=4
+# setuptools and packaging first, explicitly. gsplat's build imports
+# `packaging` while compiling its CUDA extension, and this base image ships a
+# pip with no setuptools alongside it - so the install fails inside the build
+# rather than at resolution, which is why the error names a missing module
+# instead of a missing dependency.
+RUN pip install --no-cache-dir "setuptools>=70" wheel packaging ninja
+
 RUN pip install --no-cache-dir "gsplat==1.5.3" \
  && python -c "from gsplat.cuda._backend import _C; print('gsplat kernels built')"
 

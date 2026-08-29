@@ -109,6 +109,13 @@ export interface SplatViewerOptions {
    * an unviable one for detail nobody can resolve at arm's length.
    */
   maxPixelRatio?: number;
+  /**
+   * Credential mode for the asset fetch. Defaults to "omit", which is right
+   * for a signed URL: sending a session cookie to an object store is useless
+   * there and hands the cookie to a host that has no business with it. A
+   * caller reading the asset back through its own API passes "include".
+   */
+  credentials?: RequestCredentials;
   onStatus?: (status: SplatStatus) => void;
   onFrameStats?: (stats: FrameStats) => void;
 }
@@ -274,9 +281,10 @@ interface Downloaded {
 async function downloadWithProgress(
   url: string,
   signal: AbortSignal,
+  credentials: RequestCredentials,
   onProgress: (loaded: number, total: number | null) => void,
 ): Promise<Downloaded> {
-  const response = await fetch(url, { signal, mode: "cors" });
+  const response = await fetch(url, { signal, mode: "cors", credentials });
   if (!response.ok) {
     throw new Error(`Server answered ${response.status} ${response.statusText}`);
   }
@@ -391,6 +399,7 @@ export function createSplatViewer(options: SplatViewerOptions): SplatViewer {
     container,
     url,
     maxPixelRatio = 2,
+    credentials = "omit",
     onStatus,
     onFrameStats,
   } = options;
@@ -600,7 +609,7 @@ export function createSplatViewer(options: SplatViewerOptions): SplatViewer {
 
     let loadedMesh: SplatMesh;
     if (isSingleFileAsset(url)) {
-      const { bytes } = await downloadWithProgress(url, abort.signal, (loaded, total) => {
+      const { bytes } = await downloadWithProgress(url, abort.signal, credentials, (loaded, total) => {
         publish({
           bytesLoaded: loaded,
           bytesTotal: total,
@@ -629,7 +638,10 @@ export function createSplatViewer(options: SplatViewerOptions): SplatViewer {
     } else {
       // A multi-file bundle: the renderer must resolve the siblings itself, so
       // byte progress is genuinely unavailable and is left null rather than
-      // faked. This branch is also NOT abortable — the transfer happens inside
+      // faked. It also cannot carry `credentials`: the renderer issues those
+      // requests itself, so a multi-file bundle has to be reachable by a
+      // signed URL rather than through an authenticated API. This branch is
+      // additionally NOT abortable — the transfer happens inside
       // the renderer's own worker with no cancellation channel — so unmounting
       // mid-load lets it run to completion. Single-file assets, which is every
       // format this product will ship, do abort correctly.

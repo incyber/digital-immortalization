@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from avatar.gateway.csrf import require_same_site_header
 from avatar.gateway.defaults import defaults_payload
 from avatar.gateway.erasure import erase_account, erase_avatar
 from avatar.gateway.models import (
@@ -41,7 +42,7 @@ from avatar.persona import (
 )
 from avatar.safety.crisis_lines import UnsupportedCountry, parse_attested, selectable
 from avatar.services.voices import UnsupportedLocale, supported
-from avatar.storage.keys import voice_key
+from avatar.storage.keys import belongs_to, voice_key
 
 # Two minutes of audio at any sane bitrate. Past this something other than a
 # voice reference is being uploaded.
@@ -124,10 +125,13 @@ class ConsentInput(BaseModel):
     evidence_key: str | None = None
 
 
-# Recreating yourself is the one case where the account holder is
-# unambiguously the rights holder. Nobody needs to review a person's
-# permission to be themselves, and requiring it would make the gate
-# ceremony rather than protection.
+# Recreating yourself is a real, reasonable case: nobody needs a reviewer's
+# permission to be themselves. But "I am the subject" is a claim the account
+# holder makes about themselves, not something a third party attested to and
+# a human read evidence for - see ConsentStatus.SELF_ATTESTED, the status
+# this relationship produces. Anything else is arbitrary client text and gets
+# no special treatment at all: the only thing that ever bypasses review is
+# this exact word.
 SELF_RELATIONSHIP = "self"
 
 
@@ -367,7 +371,10 @@ def build_router(settings, current_user, get_db, store) -> APIRouter:
         await db.commit()
         return _describe(avatar, attested)
 
-    @router.post("/api/avatars/{avatar_id}/photo-set/{photo_set_id}")
+    @router.post(
+        "/api/avatars/{avatar_id}/photo-set/{photo_set_id}",
+        dependencies=[Depends(require_same_site_header)],
+    )
     async def attach_photo_set(
         avatar_id: str,
         photo_set_id: str,
@@ -502,11 +509,13 @@ def build_router(settings, current_user, get_db, store) -> APIRouter:
     ):
         """Record who authorised this recreation.
 
-        Recreating yourself is verified immediately: the account holder is the
-        rights holder and no third party's rights are engaged. Anybody else's
-        likeness is recorded as pending and needs a human to read the evidence
-        document, because a self-service route to 'verified' would make the
-        gate decorative.
+        Recreating yourself is callable immediately, recorded as a claim
+        (SELF_ATTESTED) rather than as a reviewed verification: the account
+        holder is asserting they are the subject, and nobody needs to review
+        a person's permission to be themselves. Anybody else's likeness is
+        recorded as pending and needs a human to read the evidence document,
+        because a self-service route to VERIFIED would make the gate
+        decorative.
         """
         try:
             await assert_owned(db, avatar_id, user_id)
@@ -522,16 +531,29 @@ def build_router(settings, current_user, get_db, store) -> APIRouter:
 
         relationship = body.relationship_to_subject.strip().lower()
 
+        # evidence_key is client-supplied text; the only guarantee worth
+        # anything is that it names an object inside this tenant's own prefix,
+        # checked the same way every other tenant-scoped key is - see
+        # storage/keys.py. Anything else is either a bug or an attempt to
+        # attach somebody else's evidence document to this consent record.
+        evidence_key = body.evidence_key
+        if evidence_key is not None and not belongs_to(evidence_key, user_id):
+            raise HTTPException(
+                status_code=400, detail="evidence key does not belong to this tenant"
+            )
+
         record.rights_holder_name = body.rights_holder_name.strip()
         record.relationship_to_subject = relationship
         record.jurisdiction = body.jurisdiction.strip()
-        record.evidence_s3_key = body.evidence_key
+        record.evidence_s3_key = evidence_key
 
         if relationship == SELF_RELATIONSHIP:
-            # The account holder attesting that the subject is themselves. No
-            # third party's rights are engaged, so there is nothing for a
-            # reviewer to check.
-            record.status = ConsentStatus.VERIFIED
+            # The account holder claiming to be the subject. Real and
+            # callable, but a self-attestation is not a reviewed
+            # verification - it stays a distinguishable status rather than
+            # being folded into VERIFIED, so an operator auditing consent
+            # records can always tell which is which.
+            record.status = ConsentStatus.SELF_ATTESTED
             record.verified_at = datetime.now(UTC)
             record.verified_by = f"self-attested by {user_id}"
         else:

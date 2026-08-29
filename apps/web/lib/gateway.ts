@@ -194,7 +194,39 @@ export type AvatarSplat = {
   gaussians: number;
   size_bytes: number;
   backend: string | null;
+  // A short-lived signed URL for the asset itself, straight from the object
+  // store. Optional because it is the store's answer, not the database's: a
+  // gateway that cannot sign one leaves it out and the client falls back to
+  // reading the asset through the gateway. See splatAssetUrl.
+  asset_url?: string | null;
 };
+
+/** Where a built likeness is read from, and whether the read carries the session. */
+export type SplatAsset = {
+  url: string;
+  // A signed store URL authenticates itself and must be fetched anonymously —
+  // sending a cookie to a third-party bucket is both useless and a leak. The
+  // gateway route is a different origin from this page and needs the session
+  // cookie, which is the only reason this is not a constant.
+  credentials: RequestCredentials;
+};
+
+/**
+ * The asset behind a built likeness, or null if there is not one to read.
+ *
+ * Nothing here is public: the store holds photographs of dead people, so the
+ * bytes come either from a signed URL that expires or from the gateway with
+ * the session attached. There is no unauthenticated path to a likeness.
+ */
+export function splatAssetUrl(splat: AvatarSplat): SplatAsset | null {
+  if (!splat.built) return null;
+  if (splat.asset_url) return { url: splat.asset_url, credentials: "omit" };
+  if (!splat.splat_key) return null;
+  return {
+    url: `${GATEWAY}/api/avatars/${splat.avatar_id}/splat/asset`,
+    credentials: "include",
+  };
+}
 
 export const api = {
   register: (email: string, password: string) =>

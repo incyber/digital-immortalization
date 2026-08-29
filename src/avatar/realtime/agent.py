@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import os
 import sys
@@ -46,7 +47,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.transports.livekit.transport import LiveKitParams, LiveKitTransport
 
 from avatar.config import Settings, get_settings
-from avatar.marking.declare import declare
+from avatar.marking.declare import ATTR_DECLARATION_FAILED, declare
 from avatar.marking.manifest import (
     ModelRef,
     SessionManifest,
@@ -237,6 +238,65 @@ def build_pipeline(
     return pipeline, task, scene, services, director
 
 
+class DeclarationFailed(RuntimeError):
+    """The synthetic-content declaration never reached the room.
+
+    Raised rather than merely logged: there is no return value that means
+    "proceed anyway," because a call proceeding undeclared is the one outcome
+    Article 50 forbids.
+    """
+
+
+async def declare_or_raise(
+    get_room,
+    manifest: SessionManifest,
+    *,
+    attempts: int = 60,
+    delay_seconds: float = 0.25,
+) -> None:
+    """Retry the declaration until the room is reachable, then give up loudly.
+
+    The room takes a moment to finish connecting after the agent joins the
+    call, so a handful of early failures (get_room raising because the
+    client has no room yet) are expected and not a reason to end anything.
+    Running out of attempts is different: at that point the declaration is
+    not delayed, it is not going to happen, and the caller must not let the
+    call continue on that basis.
+    """
+    last_exc: Exception | None = None
+    for _ in range(attempts):
+        try:
+            room_obj = get_room()
+            await declare(room_obj.local_participant, manifest)
+            return
+        except Exception as exc:  # noqa: BLE001 - retried below, raised after
+            last_exc = exc
+            await asyncio.sleep(delay_seconds)
+    raise DeclarationFailed(
+        "synthetic-content declaration was never published; refusing to run the call"
+    ) from last_exc
+
+
+async def end_call_undeclared(get_room) -> None:
+    """Tell whoever is on the call why it is ending, then end it.
+
+    The attribute is set before disconnecting for the same reason declare()
+    itself orders metadata before the flag: a client watching for either has
+    to be able to read the reason before the room goes away. Best-effort if
+    the room was never reachable at all - there is nothing to publish to and
+    nothing to disconnect from.
+    """
+    try:
+        room_obj = get_room()
+    except Exception:  # noqa: BLE001 - never connected; nothing to notify or end
+        return
+    try:
+        await room_obj.local_participant.set_attributes({ATTR_DECLARATION_FAILED: "true"})
+    except Exception:  # noqa: BLE001 - the disconnect below still must happen
+        logger.error("could not publish the declaration-failed reason before ending the call")
+    await room_obj.disconnect()
+
+
 async def run_agent(
     room: str,
     token: str,
@@ -313,25 +373,30 @@ async def run_agent(
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(task)
 
-    # Declare the stream synthetic before any media flows. This travels on the
-    # signalling channel, so unlike a pixel watermark it is not destroyed by
-    # the video codec - see marking/declare.py.
-    async def declare_when_connected() -> None:
-        for _ in range(60):
-            try:
-                room_obj = transport._client.room
-                await declare(room_obj.local_participant, manifest)
-                return
-            except Exception:  # noqa: BLE001 - retried below
-                await asyncio.sleep(0.25)
-        logger.error("never managed to declare this stream as synthetic")
+    # The pipeline is started as its own task so this coroutine can watch the
+    # declaration in parallel with it, rather than after it - runner.run()
+    # is what actually starts media flowing (see WorkerRunner._setup_session),
+    # so waiting for it to return before declaring would mean declaring only
+    # once the call is already over.
+    run_task = asyncio.create_task(runner.run())
 
-    declare_task = asyncio.create_task(declare_when_connected())
-
+    # Declare the stream synthetic before the call is allowed to continue.
+    # This travels on the signalling channel, so unlike a pixel watermark it
+    # is not destroyed by the video codec - see marking/declare.py. Unlike a
+    # dropped frame, there is no proceeding without it: Article 50 requires
+    # the disclosure, not a best effort at one, so a declaration that never
+    # publishes ends the call rather than becoming a log line nobody reads.
     try:
-        await runner.run()
-    finally:
-        declare_task.cancel()
+        await declare_or_raise(lambda: transport._client.room, manifest)
+    except DeclarationFailed:
+        logger.error(f"room {room}: never declared synthetic; ending the call undeclared")
+        run_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await run_task
+        await end_call_undeclared(lambda: transport._client.room)
+        raise
+
+    await run_task
 
 
 def main() -> None:

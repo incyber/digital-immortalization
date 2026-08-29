@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from avatar.gateway.csrf import require_same_site_header
 from avatar.gateway.models import Photo, PhotoSet, PhotoSetStatus, TrainingJob, TrainingStatus
 from avatar.gateway.tenancy import TenantError
 from avatar.ingest.finalise import FinaliseError, finalise_avatar
@@ -83,7 +84,9 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
             ),
         }
 
-    @router.post("/api/photo-sets", status_code=201)
+    @router.post(
+        "/api/photo-sets", status_code=201, dependencies=[Depends(require_same_site_header)]
+    )
     async def create(
         db: AsyncSession = Depends(get_db),  # noqa: B008
         user_id: str = Depends(current_user),
@@ -203,7 +206,10 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
             "source_clip": True,
         }
 
-    @router.post("/api/photo-sets/{photo_set_id}/evaluate")
+    @router.post(
+        "/api/photo-sets/{photo_set_id}/evaluate",
+        dependencies=[Depends(require_same_site_header)],
+    )
     async def evaluate(
         photo_set_id: str,
         db: AsyncSession = Depends(get_db),  # noqa: B008
@@ -220,7 +226,10 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
         )
         return describe(photo_set, list(photos))
 
-    @router.post("/api/photo-sets/{photo_set_id}/revalidate")
+    @router.post(
+        "/api/photo-sets/{photo_set_id}/revalidate",
+        dependencies=[Depends(require_same_site_header)],
+    )
     async def revalidate(
         photo_set_id: str,
         db: AsyncSession = Depends(get_db),  # noqa: B008
@@ -254,7 +263,11 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"deleted_images": removed}
 
-    @router.post("/api/photo-sets/{photo_set_id}/train", status_code=202)
+    @router.post(
+        "/api/photo-sets/{photo_set_id}/train",
+        status_code=202,
+        dependencies=[Depends(require_same_site_header)],
+    )
     async def train(
         photo_set_id: str,
         db: AsyncSession = Depends(get_db),  # noqa: B008

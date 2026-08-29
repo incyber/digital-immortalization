@@ -189,8 +189,10 @@ async def test_country_is_case_insensitive(client, country):
     assert response.status_code == 201
 
 
-async def test_recreating_yourself_is_verified_immediately(client):
-    """Nobody needs permission to be themselves.
+async def test_recreating_yourself_is_self_attested_and_callable_immediately(client):
+    """Nobody needs permission to be themselves - but "I am the subject" is a
+    claim, not a reviewed verification, so it gets its own status rather than
+    silently becoming "verified".
 
     Requiring a reviewer here would be ceremony, and it is the case that
     otherwise dead-ends: build an avatar of yourself and never be able to call
@@ -207,8 +209,13 @@ async def test_recreating_yourself_is_verified_immediately(client):
         },
     )
     assert response.status_code == 201
-    assert response.json()["status"] == "verified"
+    assert response.json()["status"] == "self_attested"
     assert response.json()["needs_review"] is False
+
+    # The honest case still works: the call is not blocked behind a review
+    # that would make self-recreation dead-end.
+    session = await client.post("/api/sessions", json={"avatar_id": avatar_id})
+    assert session.status_code != 403
 
 
 async def test_self_attestation_is_case_insensitive(client):
@@ -222,7 +229,24 @@ async def test_self_attestation_is_case_insensitive(client):
             "jurisdiction": "US-WA",
         },
     )
-    assert response.json()["status"] == "verified"
+    assert response.json()["status"] == "self_attested"
+
+
+async def test_self_attestation_is_not_recorded_as_a_human_reviewed_verification(client):
+    # The one-word bypass this closes: typing "self" must not produce a
+    # record indistinguishable from one a reviewer actually read evidence
+    # for.
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/consent",
+        json={
+            "rights_holder_name": "Myself",
+            "relationship_to_subject": "self",
+            "jurisdiction": "US-WA",
+        },
+    )
+    assert response.json()["status"] != "verified"
 
 
 async def test_anybody_elses_likeness_still_needs_review(client):

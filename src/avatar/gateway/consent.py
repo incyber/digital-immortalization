@@ -24,6 +24,15 @@ class ConsentError(PermissionError):
         super().__init__(reason)
 
 
+# Both open a session. VERIFIED means a reviewer read the evidence;
+# SELF_ATTESTED means the account holder claimed to be the subject and no
+# third party's rights are engaged. Callers that only need "may this call
+# proceed" should use this; callers that care whether a human reviewed the
+# claim should read record.status directly instead of calling this a second
+# time - see cli/consent.py for the operator side of that distinction.
+_OPEN_STATUSES = (ConsentStatus.VERIFIED, ConsentStatus.SELF_ATTESTED)
+
+
 async def assert_consented(db: AsyncSession, avatar_id: str) -> ConsentRecord:
     """Return the consent record, or raise.
 
@@ -45,7 +54,7 @@ async def assert_consented(db: AsyncSession, avatar_id: str) -> ConsentRecord:
             "rights-holder is required before any session can start"
         )
 
-    if record.status is not ConsentStatus.VERIFIED:
+    if record.status not in _OPEN_STATUSES:
         raise ConsentError(
             f"consent status is {record.status.value}, not verified", status=record.status.value
         )

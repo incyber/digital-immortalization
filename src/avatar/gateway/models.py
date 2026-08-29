@@ -28,15 +28,22 @@ class Base(DeclarativeBase):
 
 
 class ConsentStatus(str, enum.Enum):
-    """Only VERIFIED opens a session.
+    """VERIFIED and SELF_ATTESTED both open a session; nothing else does.
 
     REVOKED exists as a distinct state from REJECTED because a rights-holder
     withdrawing permission is a supported operation with its own audit trail,
     not a review that went badly.
+
+    SELF_ATTESTED exists as a distinct state from VERIFIED for the same
+    reason: an account holder's claim to be the subject is a real, callable
+    basis for a session, but it is not the thing a reviewer read and signed
+    off on, and collapsing the two into one value would erase that
+    difference from every audit trail that reads status back.
     """
 
     PENDING = "pending"
     VERIFIED = "verified"
+    SELF_ATTESTED = "self_attested"
     REJECTED = "rejected"
     REVOKED = "revoked"
 

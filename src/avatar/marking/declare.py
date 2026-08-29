@@ -34,6 +34,11 @@ ATTR_SOURCE_TYPE = "digital_source_type"
 ATTR_GENERATOR = "claim_generator"
 ATTR_WATERMARK = "watermark_payload"
 
+# Set instead of the above when the declaration itself never got out - see
+# realtime/agent.py, which ends the call rather than let media flow with
+# neither this flag nor the real declaration on record.
+ATTR_DECLARATION_FAILED = "declaration_failed"
+
 
 async def declare(participant: rtc.LocalParticipant, manifest: SessionManifest) -> None:
     """Attach the synthetic-content declaration to this participant.
