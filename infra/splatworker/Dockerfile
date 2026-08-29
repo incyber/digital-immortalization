@@ -32,7 +32,14 @@
 #   insightface, smplx           forbidden across this whole system.
 #
 #   The mesh half of TRELLIS's basic dependency list - pymeshfix (GPL-3.0),
-#   python-igraph (GPL-2.0), pyvista, xatlas, open3d, trimesh - is also absent.
+#   python-igraph (GPL-2.0), pyvista, xatlas, trimesh - is also absent.
+#
+#   open3d is the exception, and it is installed. It was excluded with the
+#   others on the reasoning that nothing here extracts a mesh, but
+#   trellis.representations imports it eagerly, so the Gaussian path does not
+#   in fact avoid it - the build proved that, which is what the build is for.
+#   Its licence is MIT, read at source, so it is permissible where the GPL
+#   pair are not.
 #   We never extract a mesh, so none of it is imported: trellis/utils/__init__
 #   is empty and trellis.renderers resolves lazily, so nothing restricted is
 #   reachable from the Gaussian path this worker uses.
@@ -152,6 +159,10 @@ print('no restricted modules present')"
 # The Gaussian path must import with none of them, which is the claim the
 # licence posture rests on. Checked at build time so a TRELLIS update that
 # moves an import into the hot path is caught here rather than in an audit.
+# open3d, MIT. See the note above: the Gaussian path imports it whether or not
+# a mesh is ever produced.
+RUN pip install --no-cache-dir "open3d>=0.18"
+
 RUN cd /opt/TRELLIS && python -c "\
 import trellis; \
 from trellis.pipelines import TrellisImageTo3DPipeline; \
