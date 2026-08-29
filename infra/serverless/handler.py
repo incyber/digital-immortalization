@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import binascii
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -326,6 +327,11 @@ FACE_SERVICE_URL = os.environ.get("FACE_SERVICE_URL", "http://127.0.0.1:7001")
 FACE_PYTHON = os.environ.get("FACE_PYTHON", "/opt/facegeom-venv/bin/python")
 FACE_READY_TIMEOUT_S = 60
 
+# Where the bootstrap unpacked us. The face service and the LivePortrait patch
+# travel in the same private bundle as this file, so they are found relative to
+# it rather than at a path baked into the image.
+APP_DIR = Path(os.environ.get("APP_DIR", "/opt/app"))
+
 
 def _start_face_service() -> subprocess.Popen | None:
     """Run the MediaPipe face service inside this worker.
@@ -369,6 +375,32 @@ def _start_face_service() -> subprocess.Popen | None:
     return process
 
 
+def _patch_cropper() -> None:
+    """Replace LivePortrait's InsightFace detector with ours.
+
+    Applied here rather than at image build time because the shim is ours and
+    the image is public. It runs once per cold worker and fails the start
+    rather than the first job: a cropper still calling InsightFace would look
+    like it worked and would breach the licence quietly.
+    """
+    shim = APP_DIR / "liveportrait" / "facegeom_shim.py"
+    patcher = APP_DIR / "liveportrait" / "patch_cropper.py"
+    target = LP_ROOT / "src" / "utils" / "cropper.py"
+
+    if "facegeom_shim" in target.read_text():
+        return
+
+    shutil.copyfile(shim, LP_ROOT / "src" / "utils" / "facegeom_shim.py")
+    result = subprocess.run(
+        [sys.executable, str(patcher)], cwd=str(LP_ROOT),
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    if result.returncode != 0 or "facegeom_shim" not in target.read_text():
+        raise SystemExit(f"could not replace the face detector: {result.stderr[-400:]}")
+    print("cropper patched to use facegeom", flush=True)
+
+
 if __name__ == "__main__":
+    _patch_cropper()
     _start_face_service()
     runpod.serverless.start({"handler": handler})

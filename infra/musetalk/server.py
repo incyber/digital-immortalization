@@ -492,6 +492,9 @@ if __name__ == "__main__":
     subprocess.Popen(
         ["/opt/facegeom-venv/bin/python", "-m", "uvicorn", "server:app",
          "--host", "127.0.0.1", "--port", "7001", "--log-level", "warning"],
-        cwd="/opt/facegeom",
+        # Alongside this file, wherever the bootstrap unpacked the bundle. The
+        # image is public and holds no code of ours, so nothing is at a fixed
+        # path any more.
+        cwd=str(Path(os.environ.get("APP_DIR", "/opt/app")) / "facegeom"),
     )
     uvicorn.run(app, host="0.0.0.0", port=7100)

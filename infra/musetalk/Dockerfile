@@ -48,7 +48,7 @@ RUN pip install --no-cache-dir \
       "numpy<2" "opencv-python-headless>=4.10,<5" soundfile librosa einops \
       omegaconf "huggingface_hub>=0.30" \
       "fastapi>=0.115" "uvicorn[standard]>=0.34" "python-multipart>=0.0.20" \
-      websockets requests redis httpx
+      websockets requests redis httpx boto3
 
 # Weights land under /opt/MuseTalk/models because upstream resolves several of
 # them relative to the working directory: the VAE joins "models" with its type,
@@ -73,12 +73,13 @@ RUN python -m venv /opt/facegeom-venv \
       "fastapi>=0.115" "uvicorn[standard]>=0.34" "python-multipart>=0.0.20" \
       "numpy>=1.26" "loguru>=0.7"
 
-COPY facegeom/server.py facegeom/facegeom_core.py /opt/facegeom/
 RUN mkdir -p /models && curl -sSL -o /models/face_landmarker.task \
       "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 
-COPY musetalk/server.py musetalk/bbox.py /opt/MuseTalk/
-COPY lease/supervisor.py /opt/supervisor.py
+# The only file of ours in the image. The renderer service, the face box
+# derivation and the lease supervisor arrive in a verified archive from private
+# storage, so this image can be public without publishing any of them.
+COPY bootstrap/bootstrap.py /opt/bootstrap.py
 
 ENV FACE_MODEL_PATH=/models/face_landmarker.task \
     FACE_SERVICE_URL=http://127.0.0.1:7001 \
@@ -90,5 +91,7 @@ EXPOSE 7100
 # kills the container instead of outliving it. `timeout` wraps it as a second,
 # dumber ceiling: if the supervisor's own loop ever stops running, this still
 # ends the pod.
-ENV LEASE_SERVICE_CMD="python -u server.py"
-CMD ["timeout", "-s", "KILL", "18000", "python", "-u", "/opt/supervisor.py"]
+ENV APP_DIR=/opt/app \
+    APP_ENTRYPOINT=handler.py \
+    LEASE_SERVICE_CMD="python -u /opt/app/server.py"
+CMD ["timeout", "-s", "KILL", "18000", "python", "-u", "/opt/bootstrap.py"]

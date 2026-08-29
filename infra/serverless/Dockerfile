@@ -11,6 +11,12 @@
 #
 # Nothing here listens on a port for the outside world. The platform starts the
 # process when a job is queued and stops it when the job ends.
+#
+# This image is publishable. It contains open-source models, their weights, and
+# a bootstrap that can only download, verify and exec - nothing specific to
+# this product. The handler, the licence-clean detector and the LivePortrait
+# patch travel in a signed archive from the operator's own object storage and
+# never enter a container registry.
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -48,7 +54,7 @@ RUN pip install --no-cache-dir -r requirements_base.txt \
       onnxruntime-gpu \
       "opencv-python-headless>=4.10,<5" \
       "numpy<2" \
-      requests runpod
+      requests runpod boto3
 
 # The six MIT weights only. The InsightFace detection models live in the same
 # repository and are deliberately not fetched: LivePortrait's LICENSE requires
@@ -61,14 +67,9 @@ snapshot_download('KlingTeam/LivePortrait', \
   allow_patterns=['liveportrait/**'])" \
  && test ! -d /opt/LivePortrait/pretrained_weights/insightface
 
-COPY liveportrait/facegeom_shim.py /opt/LivePortrait/src/utils/facegeom_shim.py
-COPY liveportrait/patch_cropper.py /opt/LivePortrait/patch_cropper.py
-
-# Rewritten at build time so a broken patch fails the build rather than the
-# first paid GPU second.
-RUN python patch_cropper.py \
- && python -c "import ast; ast.parse(open('src/utils/cropper.py').read())" \
- && grep -q facegeom_shim src/utils/cropper.py
+# The cropper is patched at start-up rather than here: the replacement detector
+# is ours and this image is public. The handler applies it before serving, and
+# refuses to start if it does not take.
 
 # --------------------------------------------------------------------------
 # CosyVoice
@@ -106,14 +107,16 @@ RUN python -m venv /opt/facegeom-venv \
       "fastapi>=0.115" "uvicorn[standard]>=0.34" "python-multipart>=0.0.20" \
       "numpy>=1.26" "loguru>=0.7"
 
-COPY facegeom/server.py facegeom/facegeom_core.py /opt/facegeom/
 RUN mkdir -p /models && curl -sSL -o /models/face_landmarker.task \
       "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 
 # --------------------------------------------------------------------------
-COPY serverless/handler.py /opt/handler.py
+# The only file of ours in the image, and it does nothing but fetch the rest.
+COPY bootstrap/bootstrap.py /opt/bootstrap.py
 
-ENV FACE_MODEL_PATH=/models/face_landmarker.task \
+ENV APP_DIR=/opt/app \
+    APP_ENTRYPOINT=handler.py \
+    FACE_MODEL_PATH=/models/face_landmarker.task \
     FACE_SERVICE_URL=http://127.0.0.1:7001 \
     FACE_PYTHON=/opt/facegeom-venv/bin/python \
     COSY_MODEL_DIR=/models/CosyVoice2-0.5B \
@@ -121,4 +124,4 @@ ENV FACE_MODEL_PATH=/models/face_landmarker.task \
     PYTHONPATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS
 
 WORKDIR /opt/LivePortrait
-CMD ["python", "-u", "/opt/handler.py"]
+CMD ["python", "-u", "/opt/bootstrap.py"]
