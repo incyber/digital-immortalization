@@ -1,8 +1,16 @@
 # Photoreal 3D Avatar — Implementation Plan
 
-**Goal:** Build a photoreal, rigged 3D character of a specific person from
-photographs and optional video, animate it with body and facial motion driven
-by conversation, and stream it live into a video call the customer can talk to.
+**Goal:** Build a photoreal 3D likeness of a specific person from photographs
+and/or video, as a Gaussian splat, animate it with facial and body motion
+driven by conversation, and stream it live into a video call the customer can
+talk to.
+
+**Renderer: Gaussian splatting.** A mesh *approximates* a face - a model fitted
+until it resembles someone. A splat *reconstructs* what a camera actually saw.
+For the only question that decides this product - does the family recognise him
+- that difference is the whole game. A splat also renders in the viewer's own
+browser, which removes the per-call GPU that was the main threat to the unit
+economics.
 
 **Why the renderer is being replaced:** every method built so far animates a
 2D image. A 2D image has no body, so it cannot stand, walk, gesture or leave
@@ -114,14 +122,27 @@ restricted model.
 
 | Part | Choice | Licence |
 |---|---|---|
-| Face geometry | FLAME 2023, fitted by optimisation over all photos jointly | CC-BY |
+| Splat optimiser and renderer | gsplat (Nerfstudio) | Apache-2.0 |
+| Browser renderer | Spark | MIT |
+| Photos-only route | TRELLIS, or LGM / TripoSR | MIT |
+| Rig for expression and head pose | FLAME 2023 | CC-BY |
 | Landmarks | MediaPipe, already in this system | Apache-2.0 |
-| Differentiable rendering | nvdiffrast / PyTorch3D | BSD |
-| Skin texture | Re-projected from the customer's own photographs | ours |
-| Unseen regions | LaMa inpainting | Apache-2.0 |
-| Body | MakeHuman CC0 assets, blending reimplemented by us | CC0 assets |
-| Rig | Mixamo auto-rig - **terms need a human to read** | unverified |
-| Renderer | Unreal + MetaHuman - **terms need a human to read** | unverified |
+| Skin, where a camera saw it | the customer's own images | ours |
+| Body, if locomotion is needed | MakeHuman CC0 assets, our own blending | CC0 assets |
+
+**Not used, and why.** The original Inria implementation forbids commercial use
+outright. GaussianAvatars is CC-BY-NC-SA (Toyota Motor Europe): "Any commercial
+use ... is strictly prohibited". SplattingAvatar is CC-BY-NC-SA and depends on
+SMPL. All three prove the technique and none may ship, so the pipeline is
+rebuilt clean-room against gsplat and FLAME 2023.
+
+**One thing genuinely unresolved.** Inria's licence notes registration with the
+Agence pour la Protection des Programmes. APP is France's software copyright
+deposit registry, not a patent office, so it restricts their code rather than
+the technique - and gsplat is an independent implementation. But no patent
+search was completed, so this is "probably fine, verify before scaling revenue
+on it" rather than cleared. A real search of Espacenet, USPTO and WIPO for
+filings citing the 3DGS authors is required before this carries a business.
 
 **Two decisions that came out differently than expected**
 
@@ -145,6 +166,32 @@ people who knew him.
 
 ---
 
+## Two intake routes, one artefact
+
+Both end in a Gaussian splat of that person, rigged to FLAME 2023 and driven by
+the motion system already built. The customer chooses neither; whichever they
+have decides.
+
+**Video, when they have it.** One session of the person talking gives genuine
+multi-view coverage over time. Every Gaussian comes from a camera that actually
+saw them, which is the best likeness obtainable.
+
+**Photographs, when that is all there is.** The missing views are *generated* -
+TRELLIS and LGM both emit 3D Gaussians directly from a single image - anchored
+on the photograph that best represents them, with the remaining photographs
+correcting skin and detail.
+
+**The limit, stated once so it is not discovered later.** Photographs taken
+years apart cannot be *reconstructed* into one splat. It is not a volume
+problem: static splatting assumes one geometrically consistent subject, and a
+person at forty and at fifty-five has no single 3D truth. Generation solves
+this by inventing the unseen angles from a model trained on many faces - so a
+photo-only likeness is partly invented where no camera looked. It will look
+right. Some of it is not measured. Thirty photographs across three decades will
+not beat one thirty-second video.
+
+---
+
 ## Phase 0 — Prove it, before building it
 
 **Nothing in Phase 1 starts until all four gates pass.** Every architecture
@@ -161,10 +208,16 @@ The entire product dies here if it fails, and it is the cheapest thing to test.
 - [ ] Put it beside the photographs and show it to someone who knows the person
       without telling them which is which.
 
+**Run it twice**, because there are two kinds of customer: once from a video,
+once from photographs alone, same person, same blind sheet, the same judge told
+nothing about which is which.
+
 **Pass:** they identify the person unprompted.
 **Fail:** stop. No later phase compensates for a face that is not them.
 
-### Gate 2: Is Epic's licence compatible with this product?
+The harness for this exists: `python -m avatar.cli.likeness blind`.
+
+### Gate 2: Is the splat pipeline legally clear enough to build a business on?
 
 Not verifiable by automated fetch — their licence pages block it. A human must
 read the current MetaHuman and Unreal Engine terms and answer:
@@ -180,7 +233,22 @@ read the current MetaHuman and Unreal Engine terms and answer:
 custom rig, web renderer. Lower realism, no licence dependency on Epic. This is
 the reason Gate 2 comes before any Unreal work rather than after it.
 
-### Gate 3: Can one GPU render a call in real time?
+### Gate 3: Can it render in the viewer's browser?
+
+Server-side splat rendering is known fast - 300fps at 512px on a desktop GPU is
+published. The question that matters commercially is the client:
+
+- [ ] Render a real splat in a browser via Spark, on a mid-range phone.
+- [ ] Measure frame rate, and the download size of the splat.
+- [ ] Confirm the server can drive expression parameters cheaply while the
+      viewer's device does the rendering.
+
+**Pass:** 25fps on a mid-range phone, with a download a customer will tolerate.
+Per-call GPU cost then goes to zero.
+**Fail:** fall back to rendering on a rented GPU per call, and the unit
+economics get the cost back.
+
+### Gate 3b: Can one GPU render a call in real time?
 
 - [ ] Stand up one character in the chosen renderer.
 - [ ] Stream it to a browser over WebRTC.
