@@ -90,6 +90,61 @@ the MuseTalk service — once, and only once, the replacement is proven better.
 
 ---
 
+## Component decisions, verified at source
+
+Four parallel investigations settled the stack. Every licence below was read at
+its own source and the operative sentence quoted, because this project has
+already been bitten twice by a permissive code licence sitting on top of a
+restricted model.
+
+**Disqualified, and why**
+
+| Component | Blocker |
+|---|---|
+| MICA, DECA, EMOCA, inferno | MPI licence: "any use for commercial ... purposes is prohibited" |
+| HRN | Apache-2.0 code, but depends on the Basel Face Model: "strictly prohibited ... for any direct or indirect for-profit purposes" |
+| FLAME *texture* model | CC BY-NC-SA. Distinct from FLAME 2023 geometry, which is fine |
+| SMIRK | MIT code, but the checkpoint is trained on CelebA, FFHQ, MEAD and LRS3 - all non-commercial. The weights are the product |
+| AvatarMe | Commercialised and never released. Nothing to license |
+| SMPL-X, STAR, SUPR | "any use for commercial ... purposes is prohibited". Commercial terms via Meshcapade, no published price |
+| OpenMVS | AGPL, network copyleft |
+| Photogrammetry from a family album | Needs 40-150 images, one session, consistent light, 70-80% overlap. An album is the same person across decades, not a static object |
+
+**Chosen**
+
+| Part | Choice | Licence |
+|---|---|---|
+| Face geometry | FLAME 2023, fitted by optimisation over all photos jointly | CC-BY |
+| Landmarks | MediaPipe, already in this system | Apache-2.0 |
+| Differentiable rendering | nvdiffrast / PyTorch3D | BSD |
+| Skin texture | Re-projected from the customer's own photographs | ours |
+| Unseen regions | LaMa inpainting | Apache-2.0 |
+| Body | MakeHuman CC0 assets, blending reimplemented by us | CC0 assets |
+| Rig | Mixamo auto-rig - **terms need a human to read** | unverified |
+| Renderer | Unreal + MetaHuman - **terms need a human to read** | unverified |
+
+**Two decisions that came out differently than expected**
+
+*No learned face encoder.* Every commercially clean encoder turned out to have
+research-licensed weights. Fitting FLAME 2023 directly by optimisation needs no
+learned weights at all, and it is the better use of a family album anyway:
+twenty photographs are twenty independent observations of one fixed face,
+optimised jointly, where a single-image encoder discards nineteen of them.
+
+*No Pixel Streaming.* LiveKit ingest speaks WHIP, RTMP and SRT; Unreal's
+signalling is its own protocol, so there is no cable between them. Instead take
+Unreal's rendered frames off the GPU and publish them through the LiveKit
+publisher this project already has. One encode instead of two, and an entire
+subsystem - signalling, matchmaker, a second WebRTC hop - deleted.
+
+**Body shape cannot be inferred from head-and-shoulders photographs.** No
+published method does it; every body regressor needs a visible torso. So the
+family adjusts it: height, build, shoulders, with a live preview. That is
+honest, it is better than a silent guess, and it puts the judgement with the
+people who knew him.
+
+---
+
 ## Phase 0 — Prove it, before building it
 
 **Nothing in Phase 1 starts until all four gates pass.** Every architecture
@@ -172,6 +227,19 @@ end to end, real.
 ---
 
 ## Phase 2 — Motion that means something
+
+Design settled. Motion is scheduled on the **speech timeline, never the wall
+clock**: the model produces a sentence before the voice synthesises it, and the
+voice synthesises it before it is rendered, so a nod that must peak on a
+stressed syllable can be started before that syllable is heard. On a wall clock
+every nod arrives late.
+
+Five layers summed each frame - persona baseline, affect, prosody, gesture, and
+an aperiodic noise layer - then rate-limited per channel. The anti-loop
+property lives in the last two: drift is a sum of random walks at several time
+constants rather than any oscillator, and gestures are generated from
+parameterised families rather than replayed, so two nods in one session are
+never the same curve.
 
 The requirement is behaviour driven by content, never a loop.
 
