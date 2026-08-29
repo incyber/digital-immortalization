@@ -13,7 +13,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from avatar.gateway.models import Avatar, ConsentRecord, ConsentStatus, PhotoSet
+from avatar.gateway.models import (
+    MAX_HEIGHT_CM,
+    MIN_HEIGHT_CM,
+    Avatar,
+    BodyBuild,
+    ConsentRecord,
+    ConsentStatus,
+    PhotoSet,
+    Posture,
+    Shoulders,
+    body_shape,
+)
 from avatar.gateway.tenancy import TenantError, assert_owned, owned_query
 from avatar.ingest.voice import ACCEPTED_TYPES, inspect_voice, normalise
 from avatar.persona import InvalidProfile, persona_from_avatar
@@ -37,6 +48,20 @@ class AvatarInput(BaseModel):
     voice_description: str = ""
     boundaries: str = ""
 
+    # What the person's body was like, in the family's own words. Nothing here
+    # is required: somebody who does not know, or does not want to be asked
+    # this today, still gets an avatar. An unanswered field stays unanswered
+    # in the database and is resolved to a neutral value at build time, which
+    # is a different thing from a machine deciding an answer for them.
+    #
+    # Anything outside these words, or a height no person has had, is refused
+    # rather than nudged into range: silently rewriting a family's answer is
+    # the one behaviour that would defeat the point of asking.
+    height_cm: int | None = Field(default=None, ge=MIN_HEIGHT_CM, le=MAX_HEIGHT_CM)
+    build: BodyBuild | None = None
+    shoulders: Shoulders | None = None
+    posture: Posture | None = None
+
 
 class ConsentInput(BaseModel):
     rights_holder_name: str = Field(min_length=1, max_length=255)
@@ -50,6 +75,22 @@ class ConsentInput(BaseModel):
 # permission to be themselves, and requiring it would make the gate
 # ceremony rather than protection.
 SELF_RELATIONSHIP = "self"
+
+
+_BODY_FIELDS = ("height_cm", "build", "shoulders", "posture")
+
+
+def _apply_body(avatar: Avatar, body: AvatarInput) -> None:
+    """Copy across only the body attributes this request actually carried.
+
+    A field the request left out leaves what is stored alone, so a client that
+    predates these questions cannot wipe out what a family took the trouble to
+    tell us. Clearing one means sending it as null, which is somebody deciding
+    rather than somebody omitting.
+    """
+    for field in _BODY_FIELDS:
+        if field in body.model_fields_set:
+            setattr(avatar, field, getattr(body, field))
 
 
 def _describe(avatar: Avatar, attested: frozenset[str]) -> dict:
@@ -69,6 +110,7 @@ def _describe(avatar: Avatar, attested: frozenset[str]) -> dict:
         "biography": avatar.biography,
         "voice_description": avatar.voice_description,
         "boundaries": avatar.boundaries,
+        "body": body_shape(avatar),
         "photo_set_id": avatar.photo_set_id,
         "has_assets": bool(avatar.assets_key),
         "has_voice": bool(avatar.voice_key),
@@ -133,6 +175,7 @@ def build_router(settings, current_user, get_db, store) -> APIRouter:
             voice_description=body.voice_description.strip(),
             boundaries=body.boundaries.strip(),
         )
+        _apply_body(avatar, body)
 
         # Validated before it is stored, so an avatar that could never be
         # spoken to is never created in the first place.
@@ -183,6 +226,7 @@ def build_router(settings, current_user, get_db, store) -> APIRouter:
         avatar.biography = body.biography.strip()
         avatar.voice_description = body.voice_description.strip()
         avatar.boundaries = body.boundaries.strip()
+        _apply_body(avatar, body)
 
         try:
             persona_from_avatar(avatar, attested)

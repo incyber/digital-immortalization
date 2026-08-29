@@ -37,6 +37,10 @@ build-backend = "hatchling.build"
 packages = ["src/avatar"]
 
 [tool.pytest.ini_options]
+# Long-running property checks. Kept in the default run because the property
+# they defend - that the likeness never settles into a rhythm - is the whole
+# requirement, and a check that only runs on demand is a check nobody runs.
+markers = ["slow: takes seconds rather than milliseconds"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 # repo root on sys.path so shared test helpers import as tests.*

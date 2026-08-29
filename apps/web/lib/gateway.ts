@@ -76,7 +76,7 @@ export type Country = {
   crisis_line: string;
 };
 
-export type AvatarInput = {
+export type PersonInput = {
   display_name: string;
   locale: string;
   country: string;
@@ -85,8 +85,39 @@ export type AvatarInput = {
   boundaries: string;
 };
 
-export type Avatar = AvatarInput & {
+// The body, in words. Someone who knew the person can say "solid"; nobody can
+// say 0.63, so nothing below is a number except the height they knew.
+export type Build = "slight" | "average" | "solid" | "heavy";
+export type ShoulderWidth = "narrow" | "average" | "broad";
+export type Posture = "upright" | "relaxed" | "stooped";
+
+// null is a real answer: it means nobody said, and the gateway keeps it that
+// way rather than filling something in on the family's behalf.
+export type StatedBody = {
+  height_cm: number | null;
+  build: Build | null;
+  shoulders: ShoulderWidth | null;
+  posture: Posture | null;
+};
+
+export type Body = {
+  stated: StatedBody;
+  // What the build falls back on wherever a question was left blank. Kept
+  // apart from `stated` so a fallback can never be read back as something the
+  // family told us.
+  in_use: {
+    height_cm: number;
+    build: Build;
+    shoulders: ShoulderWidth;
+    posture: Posture;
+  };
+};
+
+export type AvatarInput = PersonInput & StatedBody;
+
+export type Avatar = PersonInput & {
   id: string;
+  body: Body;
   photo_set_id: string | null;
   has_assets: boolean;
   // Generated from the name, never supplied by the customer.
@@ -140,11 +171,17 @@ export const api = {
     }),
 
   attachPhotoSet: (avatarId: string, photoSetId: string) =>
-    request<Avatar>(`/api/avatars/${avatarId}/photo-set/${photoSetId}`, { method: "POST" }),
+    request<Avatar>(`/api/avatars/${avatarId}/photo-set/${photoSetId}`, {
+      method: "POST",
+    }),
 
   recordConsent: (
     avatarId: string,
-    body: { rights_holder_name: string; relationship_to_subject: string; jurisdiction: string },
+    body: {
+      rights_holder_name: string;
+      relationship_to_subject: string;
+      jurisdiction: string;
+    },
   ) =>
     request<{ status: string }>(`/api/avatars/${avatarId}/consent`, {
       method: "POST",
@@ -170,14 +207,14 @@ export const api = {
   uploadVideo: (id: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return request<{ frames_examined: number; accepted: number; photos: PhotoVerdict[] }>(
-      `/api/photo-sets/${id}/video`,
-      { method: "POST", body: form },
-    );
+    return request<{
+      frames_examined: number;
+      accepted: number;
+      photos: PhotoVerdict[];
+    }>(`/api/photo-sets/${id}/video`, { method: "POST", body: form });
   },
 
-  evaluate: (id: string) =>
-    request<PhotoSet>(`/api/photo-sets/${id}/evaluate`, { method: "POST" }),
+  evaluate: (id: string) => request<PhotoSet>(`/api/photo-sets/${id}/evaluate`, { method: "POST" }),
 
   // Re-runs the current checks over images already uploaded, so a validator
   // fix does not mean gathering the photographs again.

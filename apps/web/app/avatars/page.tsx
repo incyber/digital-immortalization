@@ -6,6 +6,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { summarise } from "@/lib/body";
 import { api, ApiError, type Avatar } from "@/lib/gateway";
 
 export default function Avatars() {
@@ -54,53 +55,56 @@ export default function Avatars() {
         )}
 
         <ul className="space-y-3">
-          {avatars?.map((avatar) => (
-            <li
-              key={avatar.id}
-              className="rounded-xl border border-white/10 bg-white/5 p-5"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h2 className="font-medium">{avatar.display_name}</h2>
-                  <p className="mt-1 line-clamp-2 text-sm text-neutral-400">
-                    {avatar.biography}
-                  </p>
-                  <p className="mt-2 text-xs text-neutral-500">
-                    {avatar.crisis_line
-                      ? `Crisis line: ${avatar.crisis_line.name} (${avatar.crisis_line.number})`
-                      : "Not usable yet"}
-                  </p>
+          {avatars?.map((avatar) => {
+            const body = summarise(avatar.body.stated);
+            return (
+              <li key={avatar.id} className="rounded-xl border border-white/10 bg-white/5 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h2 className="font-medium">{avatar.display_name}</h2>
+                    <p className="mt-1 line-clamp-2 text-sm text-neutral-400">{avatar.biography}</p>
+                    {/* What the family said about the body, or plainly that
+                      they did not. Neither reads as a thing left undone. */}
+                    <p className="mt-2 text-xs text-neutral-500">
+                      {body ?? "Body not described — a neutral build is used."}
+                    </p>
+                    <p className="mt-1 text-xs text-neutral-500">
+                      {avatar.crisis_line
+                        ? `Crisis line: ${avatar.crisis_line.name} (${avatar.crisis_line.number})`
+                        : "Not usable yet"}
+                    </p>
+                  </div>
+
+                  <div className="flex shrink-0 gap-2">
+                    <Link
+                      href={`/upload?avatar=${avatar.id}`}
+                      className="rounded-full bg-white/10 px-4 py-2 text-sm hover:bg-white/20"
+                    >
+                      {avatar.photo_set_id ? "Photographs" : "Add photographs"}
+                    </Link>
+                    <Link
+                      href={`/call/${avatar.id}`}
+                      className={`rounded-full px-4 py-2 text-sm ${
+                        avatar.callable
+                          ? "bg-white font-medium text-neutral-950 hover:bg-neutral-200"
+                          : "pointer-events-none bg-white/5 text-neutral-600"
+                      }`}
+                    >
+                      Call
+                    </Link>
+                  </div>
                 </div>
 
-                <div className="flex shrink-0 gap-2">
-                  <Link
-                    href={`/upload?avatar=${avatar.id}`}
-                    className="rounded-full bg-white/10 px-4 py-2 text-sm hover:bg-white/20"
-                  >
-                    {avatar.photo_set_id ? "Photographs" : "Add photographs"}
-                  </Link>
-                  <Link
-                    href={`/call/${avatar.id}`}
-                    className={`rounded-full px-4 py-2 text-sm ${
-                      avatar.callable
-                        ? "bg-white font-medium text-neutral-950 hover:bg-neutral-200"
-                        : "pointer-events-none bg-white/5 text-neutral-600"
-                    }`}
-                  >
-                    Call
-                  </Link>
-                </div>
-              </div>
-
-              {!avatar.callable && (
-                <p className="mt-3 text-xs text-neutral-500">
-                  {avatar.has_assets
-                    ? "Waiting on verified consent before this can be called."
-                    : "Add photographs and build the avatar before calling."}
-                </p>
-              )}
-            </li>
-          ))}
+                {!avatar.callable && (
+                  <p className="mt-3 text-xs text-neutral-500">
+                    {avatar.has_assets
+                      ? "Waiting on verified consent before this can be called."
+                      : "Add photographs and build the avatar before calling."}
+                  </p>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </div>
     </main>

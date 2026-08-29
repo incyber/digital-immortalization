@@ -37,10 +37,51 @@ class AudioChunk:
 
     pcm: bytes
     sample_rate: int
+    # Where this chunk begins on the session's speech timeline - seconds of
+    # synthesised audio committed so far, not wall-clock time.
+    #
+    # The distinction decides whether motion can be timed at all. The model
+    # produces a sentence before the voice synthesises it, and the voice
+    # synthesises it before it is rendered, so a nod that must peak on a
+    # stressed syllable can be started before that syllable is heard. Timed on
+    # a wall clock, every nod arrives after the beat it was meant to land on.
+    #
+    # Defaulted so every existing caller and test stays valid.
+    t0: float = 0.0
 
     @property
     def duration_s(self) -> float:
         return len(self.pcm) / 2 / self.sample_rate
+
+
+@runtime_checkable
+class MotionSource(Protocol):
+    """A continuous stream of animation parameters on the speech timeline.
+
+    Separate from the renderer because motion is not pixels. What the head and
+    face are doing can be computed, asserted on and reviewed with no GPU and no
+    renderer at all, which is what keeps the expensive half of this system
+    testable on a laptop.
+    """
+
+    def pose_at(self, t: float) -> object:
+        """The pose at time t. Pure: no state change, no allocation, no waiting.
+
+        Called once per frame on the render path, so it must never block. If a
+        plan has not been refined yet the caller gets the coarse one rather
+        than waiting for a better answer that would arrive late.
+        """
+
+    def interrupt(self, t: float) -> None:
+        """Abandon planned motion from t onward. Must be effectively immediate.
+
+        Called before the renderer's own cancel() during barge-in, so the face
+        is already correct by the time frames resume.
+        """
+
+    @property
+    def timeline(self) -> float:
+        """Seconds of speech committed so far."""
 
 
 @runtime_checkable
@@ -63,6 +104,16 @@ class RendererStage(Protocol):
 
         Yields incrementally. Waiting for the whole chunk would add its full
         duration to time-to-first-frame.
+        """
+
+    async def attach_motion(self, source: MotionSource | None) -> None:
+        """Bind a motion source, or clear it.
+
+        Optional by design. A renderer that only animates a mouth ignores it
+        entirely; one that drives a whole face and body reads a pose per frame.
+        Adding this as a method rather than a parameter on render() is what
+        keeps every existing backend substitutable and the contract suite
+        unchanged.
         """
 
     async def cancel(self) -> None:

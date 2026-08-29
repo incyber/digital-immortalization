@@ -65,3 +65,29 @@ async def test_render_after_cancel_still_works(renderer_factory, tmp_assets):
     await r.cancel()
     frames = [f async for f in r.render(ONE_SECOND)]
     assert frames, "a cancelled stage must be reusable for the next turn"
+
+
+async def test_a_renderer_may_ignore_motion_without_breaking(renderer_factory, tmp_assets):
+    """Motion is optional, and that is what keeps backends substitutable.
+
+    A mouth-only renderer has nothing to do with a head pose. Making motion a
+    method rather than an argument to render() means those backends stay valid
+    and this suite stays unchanged as 3D arrives.
+    """
+    r = renderer_factory(tmp_assets)
+    await r.prepare("test")
+
+    if hasattr(r, "attach_motion"):
+        await r.attach_motion(None)
+
+    frames = [f async for f in r.render(ONE_SECOND)]
+    assert frames
+
+
+async def test_audio_carries_its_place_on_the_speech_timeline():
+    """Without this, motion can only react; with it, motion can anticipate."""
+    assert ONE_SECOND.t0 == 0.0
+
+    later = AudioChunk(pcm=ONE_SECOND.pcm, sample_rate=SR, t0=12.5)
+    assert later.t0 == 12.5
+    assert later.duration_s == ONE_SECOND.duration_s

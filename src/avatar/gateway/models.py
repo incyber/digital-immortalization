@@ -52,6 +52,55 @@ class User(Base):
     avatars: Mapped[list[Avatar]] = relationship(back_populates="owner")
 
 
+class BodyBuild(str, enum.Enum):
+    """How heavily built the person was.
+
+    Words rather than a number: a family can answer "solid" and cannot answer
+    0.63, and an answer somebody can actually give is worth more than a scale
+    they would have to guess at.
+    """
+
+    SLIGHT = "slight"
+    AVERAGE = "average"
+    SOLID = "solid"
+    HEAVY = "heavy"
+
+
+class Shoulders(str, enum.Enum):
+    """Frame width, which build does not imply: a slight person can be broad."""
+
+    NARROW = "narrow"
+    AVERAGE = "average"
+    BROAD = "broad"
+
+
+class Posture(str, enum.Enum):
+    """How they carried themselves, which relatives recognise before anything
+    a tape measure would report."""
+
+    UPRIGHT = "upright"
+    RELAXED = "relaxed"
+    STOOPED = "stooped"
+
+
+# Deliberately wide. The job is to refuse nonsense -- a zero, a typo with an
+# extra digit -- not to second-guess a family, and the person being recreated
+# is not always an adult. Turning away somebody's true number would be worse
+# than accepting an unusual one.
+MIN_HEIGHT_CM = 50
+MAX_HEIGHT_CM = 250
+
+# What the build falls back on for anything left blank. Spelled out here
+# because "we were not told" and "they were average" must stay different
+# states: a NULL column is an unanswered question, and this is the only place
+# that turns one into a value. A zero standing in for either would quietly
+# become a claim about how somebody looked.
+NEUTRAL_HEIGHT_CM = 170
+NEUTRAL_BUILD = BodyBuild.AVERAGE
+NEUTRAL_SHOULDERS = Shoulders.AVERAGE
+NEUTRAL_POSTURE = Posture.RELAXED
+
+
 class Avatar(Base):
     """One recreated person, described entirely by the customer.
 
@@ -93,12 +142,69 @@ class Avatar(Base):
     voice_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     voice_quality: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
+    # Body shape, stated by the family and never estimated from the
+    # photographs. No published method recovers a body from a head-and-
+    # shoulders crop, which is what family photographs overwhelmingly are;
+    # every shape estimator needs a visible torso. Somebody who knew the
+    # person beats a guess from a head crop, and nothing about how they looked
+    # is then settled anywhere except by a person who remembers them.
+    #
+    # Four fields, because each moves the silhouette in a way the others
+    # cannot: height sets scale, build sets mass, shoulders set frame width,
+    # and posture sets how they stood. Weight is not asked for -- it is
+    # guessed badly and says nothing build does not.
+    #
+    # All four are nullable, and NULL means "not stated": never a zero, never
+    # a neutral value posing as an answer. body_shape() below is the single
+    # place a missing answer becomes a usable one.
+    height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    build: Mapped[BodyBuild | None] = mapped_column(
+        Enum(BodyBuild, native_enum=False, values_callable=lambda e: [m.value for m in e]),
+        nullable=True,
+    )
+    shoulders: Mapped[Shoulders | None] = mapped_column(
+        Enum(Shoulders, native_enum=False, values_callable=lambda e: [m.value for m in e]),
+        nullable=True,
+    )
+    posture: Mapped[Posture | None] = mapped_column(
+        Enum(Posture, native_enum=False, values_callable=lambda e: [m.value for m in e]),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     owner: Mapped[User] = relationship(back_populates="avatars")
     consent: Mapped[ConsentRecord | None] = relationship(
         back_populates="avatar", uselist=False
     )
+
+
+def body_shape(avatar: Avatar) -> dict:
+    """What the family stated, alongside what the build will actually use.
+
+    Both halves are reported rather than one merged answer, because they
+    settle different questions: what we were told, and what gets made from it.
+    Merged, a neutral default reads exactly like an answer -- and being able
+    to say which is which is the whole reason a person is asked instead of
+    something guessing from a photograph.
+    """
+    stated = {
+        "height_cm": avatar.height_cm,
+        "build": avatar.build.value if avatar.build is not None else None,
+        "shoulders": avatar.shoulders.value if avatar.shoulders is not None else None,
+        "posture": avatar.posture.value if avatar.posture is not None else None,
+    }
+    return {
+        "stated": stated,
+        "in_use": {
+            "height_cm": (
+                avatar.height_cm if avatar.height_cm is not None else NEUTRAL_HEIGHT_CM
+            ),
+            "build": (avatar.build or NEUTRAL_BUILD).value,
+            "shoulders": (avatar.shoulders or NEUTRAL_SHOULDERS).value,
+            "posture": (avatar.posture or NEUTRAL_POSTURE).value,
+        },
+    }
 
 
 class ConsentRecord(Base):
