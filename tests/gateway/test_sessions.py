@@ -131,3 +131,28 @@ async def test_insecure_cookies_are_rejected_in_production(cfg):
     cfg.cookies_secure = False
     with pytest.raises(ValueError, match="COOKIES_SECURE"):
         assert_production_ready(cfg)
+
+
+def test_the_session_cookie_works_cross_site_when_deployed():
+    """The web app and this API are on different domains in any real deploy.
+
+    A lax cookie is never sent cross-site, so sign-in appears to succeed and
+    every request after it is anonymous. samesite=none is what makes a hosted
+    site able to stay signed in, and browsers only accept it over https.
+    """
+    from fastapi.testclient import TestClient
+
+    from avatar.config import Settings
+    from avatar.gateway.app import create_app
+
+    cfg = Settings(_env_file=None, cookies_secure=True, database_url="sqlite+aiosqlite:///:memory:")
+    with TestClient(create_app(cfg)) as client:
+        response = client.post(
+            "/api/auth/register",
+            json={"email": "cross@example.com", "password": "correct-horse-battery"},
+        )
+        assert response.status_code in (200, 201), response.text
+        header = response.headers["set-cookie"].lower()
+
+    assert "samesite=none" in header
+    assert "secure" in header

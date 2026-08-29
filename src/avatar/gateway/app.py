@@ -79,11 +79,17 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
     )
 
     def set_session_cookie(response: Response, token: str) -> None:
+        # Lax when the web app and the gateway share a host, none when they do
+        # not. A deployment that serves the site from one domain and this API
+        # from another is cross-site by definition, and a lax cookie is simply
+        # never sent - sign-in appears to succeed and every later request is
+        # anonymous. Browsers only accept samesite=none over https, so it is
+        # tied to the same flag that turns on Secure.
         response.set_cookie(
             SESSION_COOKIE,
             token,
             httponly=True,
-            samesite="lax",
+            samesite="none" if settings.cookies_secure else "lax",
             secure=settings.cookies_secure,
             max_age=SESSION_TTL_SECONDS,
             path="/",
