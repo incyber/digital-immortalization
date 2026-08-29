@@ -79,3 +79,45 @@ def test_frames_differ_from_each_other(tmp_path):
         for f in frames
     }
     assert len(means) > 1
+
+
+@pytest.mark.asyncio
+async def test_the_uploaded_clip_becomes_the_base_the_renderer_drives(tmp_path):
+    """The head moves in the result because it moved in the recording.
+
+    This is the whole difference between a talking head and a photograph with
+    a mouth on it, and it is what every product doing this well actually does:
+    animate the person's own footage rather than synthesise motion onto a still.
+    """
+    from avatar.ingest.finalise import _copy_source_clip
+    from avatar.storage.keys import source_clip_key
+
+    class Store:
+        def __init__(self, contents):
+            self.contents = contents
+
+        async def get(self, tenant, key):
+            if key not in self.contents:
+                raise FileNotFoundError(key)
+            return self.contents[key]
+
+    key = source_clip_key("tenant-1", "set-1")
+    store = Store({key: b"the-original-footage"})
+
+    clip = await _copy_source_clip(store, "tenant-1", "set-1", tmp_path)
+
+    assert clip == tmp_path / "base.mp4"
+    assert clip.read_bytes() == b"the-original-footage"
+
+
+@pytest.mark.asyncio
+async def test_no_clip_is_the_ordinary_case_not_a_failure(tmp_path):
+    """Somebody who uploaded photographs still gets an avatar."""
+    from avatar.ingest.finalise import _copy_source_clip
+
+    class Empty:
+        async def get(self, tenant, key):
+            raise FileNotFoundError(key)
+
+    assert await _copy_source_clip(Empty(), "tenant-1", "set-1", tmp_path) is None
+    assert not (tmp_path / "base.mp4").exists()

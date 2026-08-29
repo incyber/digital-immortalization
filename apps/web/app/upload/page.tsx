@@ -238,12 +238,18 @@ export default function Upload() {
               usually the better source. */}
           <div className="rounded-lg border border-neutral-800 p-4">
             <p className="mb-1 text-sm font-medium text-neutral-200">
-              Or upload a short video
+              Upload a video — strongly recommended
             </p>
+            {/* Not a nicety. The renderer animates a mouth onto this clip, so
+                the head in the result moves because the head in the recording
+                moved. Photographs can only be given synthesised motion, which
+                is a harder problem with a visibly worse answer. */}
             <p className="mb-3 text-sm text-neutral-400">
-              Ten to thirty seconds of them talking, facing the camera. This
-              usually gives a better result than photographs, because it
-              contains their real movement and mouth shapes.
+              Twenty to sixty seconds of them talking to camera, head and
+              shoulders in frame. The video becomes the avatar: their real head
+              movement, blinks and posture are kept, and only the mouth is
+              changed as they speak. Photographs alone produce a much flatter
+              result.
             </p>
             <input
               ref={videoInput}

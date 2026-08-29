@@ -76,6 +76,18 @@ def asset_key(tenant_id: str, avatar_id: str, filename: str) -> str:
     return f"{tenant_prefix(tenant_id)}avatars/{_check_id(avatar_id, 'avatar id')}/{filename}"
 
 
+def source_clip_key(tenant_id: str, photo_set_id: str) -> str:
+    """The customer's own footage, kept rather than only sampled.
+
+    This is the asset the lip-sync renderer actually drives. A talking head
+    looks alive because the head moved, and the only honest source of that
+    movement is the person moving - synthesising it onto a still is a harder
+    problem with a worse answer. The frames taken from this clip still go
+    through the photo checks; the clip itself is what gets animated.
+    """
+    return f"{photo_set_prefix(tenant_id, photo_set_id)}source.mp4"
+
+
 def voice_key(tenant_id: str, avatar_id: str) -> str:
     """Where an avatar's voice reference lives.
 

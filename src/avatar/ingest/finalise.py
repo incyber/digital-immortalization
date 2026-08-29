@@ -23,6 +23,7 @@ from avatar.ingest.assets import build_avatar_assets
 from avatar.ingest.gpu_assets import attach_base_clip
 from avatar.ingest.validate import Framing
 from avatar.storage.base import BlobStore
+from avatar.storage.keys import source_clip_key
 
 
 class FinaliseError(RuntimeError):
@@ -32,6 +33,27 @@ class FinaliseError(RuntimeError):
 def assets_dir_for(cfg: Settings, avatar_id: str) -> Path:
     """Where the dispatcher expects to find an avatar's assets."""
     return Path(cfg.assets_dir) / "avatars" / avatar_id
+
+
+async def _copy_source_clip(
+    store: BlobStore, owner_id: str, photo_set_id: str, destination: Path
+) -> Path | None:
+    """Put the uploaded footage where the renderer looks for its base.
+
+    Copied rather than referenced. The renderer reads assets off local disk
+    while a call is running, and a network fetch on that path would be a
+    timeout waiting for somebody's first sentence.
+    """
+    try:
+        data = await store.get(owner_id, source_clip_key(owner_id, photo_set_id))
+    except Exception:  # noqa: BLE001 - no clip is the ordinary case
+        return None
+
+    destination.mkdir(parents=True, exist_ok=True)
+    clip = destination / "base.mp4"
+    clip.write_bytes(data)
+    logger.info(f"base clip is the customer's own footage: {len(data) // 1024}KB")
+    return clip
 
 
 async def finalise_avatar(
@@ -99,10 +121,16 @@ async def finalise_avatar(
     destination = assets_dir_for(cfg, avatar.id)
     assets.save(destination)
 
-    # After the plate assets are saved, so a GPU outage costs the avatar its
-    # head motion rather than its existence. Returns None when no endpoint is
-    # configured, which is every developer machine.
-    if assets.base_rgb is not None:
+    # The customer's own footage is the base whenever it exists. This is the
+    # difference between a face that moves and a face that does not: the lip
+    # sync renderer animates a mouth onto a clip, and a clip of the real person
+    # already contains their real head motion, blinks and posture. Nothing has
+    # to generate any of it.
+    #
+    # Falling back to synthesising motion onto a still is strictly worse and is
+    # only what happens when somebody uploaded photographs instead.
+    clip = await _copy_source_clip(store, owner_id, photo_set_id, destination)
+    if clip is None and assets.base_rgb is not None:
         await attach_base_clip(cfg, destination, assets.base_rgb)
 
     avatar.assets_key = str(destination)

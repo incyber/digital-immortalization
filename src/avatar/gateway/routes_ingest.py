@@ -32,6 +32,7 @@ from avatar.ingest.validate import (
     RECOMMENDED_MIN,
 )
 from avatar.ingest.video import VideoError, extract_frames, is_video
+from avatar.storage.keys import source_clip_key
 from avatar.training.base import JobState, TrainingRequest
 
 _STATE_TO_STATUS = {
@@ -160,6 +161,16 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
         except VideoError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        # The clip is kept, not just sampled. It is the base the lip-sync
+        # renderer drives, and the head moves in the result because the head
+        # moved in the recording.
+        await store.put(
+            user_id,
+            source_clip_key(user_id, photo_set_id),
+            data,
+            file.content_type or "video/mp4",
+        )
+
         added = []
         for index, frame in enumerate(frames):
             try:
@@ -189,6 +200,7 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
             "frames_examined": len(frames),
             "photos": added,
             "accepted": sum(1 for p in added if p["accepted"]),
+            "source_clip": True,
         }
 
     @router.post("/api/photo-sets/{photo_set_id}/evaluate")
