@@ -4,7 +4,7 @@ One process per session. Joins a LiveKit room as a participant and runs the
 conversation pipeline. Everything it uses is chosen by configuration, so the
 same file runs against a CPU renderer on a laptop and a GPU renderer in cloud.
 
-Pipeline order matters in two places:
+Pipeline order matters in four places:
 
   CrisisProcessor sits before the aggregator, so a crisis utterance never
   enters the model's context at all.
@@ -12,12 +12,22 @@ Pipeline order matters in two places:
   RendererProcessor sits after TTS and before transport output, so the video
   track is derived from the audio actually being sent rather than produced in
   parallel with it.
+
+  AffectTagStripper sits immediately after the model. Everything that would
+  otherwise see the affect tag - the voice, and the conversation history the
+  assistant aggregator writes at the end of the pipeline - is downstream of
+  that one point.
+
+  MotionDirectorProcessor sits between TTS and the renderer, so it stamps the
+  speech timeline onto audio before anything renders it, and so barge-in
+  reaches the director before it reaches the renderer's cancel.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import os
 import sys
 from datetime import UTC, datetime
@@ -41,6 +51,12 @@ from avatar.marking.manifest import (
     ModelRef,
     SessionManifest,
     watermark_payload_for,
+)
+from avatar.motion.director import MotionDirector
+from avatar.motion.processor import (
+    AffectTagStripper,
+    ListenerCue,
+    MotionDirectorProcessor,
 )
 from avatar.persona import Persona, build_system_prompt, persona_from_avatar
 from avatar.realtime.video_publisher import LiveKitVideoPublisher
@@ -116,9 +132,20 @@ def build_pipeline(
     persona: Persona,
     stage: RendererStage,
     room_name: str = "unknown",
-) -> tuple[Pipeline, PipelineTask, SceneState, dict]:
+) -> tuple[Pipeline, PipelineTask, SceneState, dict, MotionDirector]:
     """Assemble the conversation graph."""
     scene = SceneState()
+
+    # One director per session. Seeded from the room so that a call somebody
+    # says looked wrong at forty seconds can be replayed and looked at: the
+    # drift, blinks and saccades are all deterministic given this number.
+    # Deliberately not hash(), which is salted per process - see
+    # gesture._seed_from for the same decision made for the same reason.
+    director = MotionDirector(
+        session_seed=int.from_bytes(
+            hashlib.blake2b(room_name.encode("utf-8"), digest_size=4).digest(), "big"
+        )
+    )
 
     # Both follow the avatar rather than global configuration.
     stt = build_stt(cfg, persona.locale)
@@ -155,6 +182,10 @@ def build_pipeline(
     pipeline = Pipeline(
         [
             transport.input(),
+            # Taps the person's own audio, where a clause ending and a rising
+            # question are, and which nothing downstream of the transcriber
+            # can see any more.
+            ListenerCue(director),
             VisionSampler(
                 scene, cfg, on_observation=refresh_system_prompt, locale=persona.locale
             ),
@@ -162,7 +193,18 @@ def build_pipeline(
             CrisisProcessor(profile),
             aggregators.user(),
             llm,
+            # Immediately after the model, which is what makes one placement
+            # do both halves of the job: tts is the next stage downstream, and
+            # the assistant aggregator - which writes conversation history -
+            # is at the end of the same downstream path. A tag removed here
+            # can be neither spoken nor remembered.
+            AffectTagStripper(director),
             tts,
+            # Between tts and the renderer: it stamps each chunk of audio with
+            # where it begins on the speech timeline, and on barge-in it
+            # interrupts the director before the frame reaches the renderer's
+            # own cancel, so motion state is right when frames resume.
+            MotionDirectorProcessor(director),
             RendererProcessor(stage, avatar_id=persona.avatar_id),
             # Publishes video directly: Pipecat's LiveKit transport implements
             # video input only. See video_publisher.py.
@@ -192,7 +234,7 @@ def build_pipeline(
     )
     # Returned so the caller can warm them before the pipeline starts.
     services = {"stt": stt, "tts": tts, "llm": llm}
-    return pipeline, task, scene, services
+    return pipeline, task, scene, services, director
 
 
 async def run_agent(
@@ -225,7 +267,17 @@ async def run_agent(
         ),
     )
 
-    _, task, _, services = build_pipeline(cfg, transport, persona, stage, room_name=room)
+    _, task, _, services, director = build_pipeline(
+        cfg, transport, persona, stage, room_name=room
+    )
+
+    # A renderer that draws a whole face reads a pose per frame; one that only
+    # animates a mouth has no attach_motion at all and is left alone. Checked
+    # rather than required, so every existing backend stays substitutable -
+    # the same reason the method is on the protocol instead of on render().
+    attach_motion = getattr(stage, "attach_motion", None)
+    if attach_motion is not None:
+        await attach_motion(director)
 
     @transport.event_handler("on_first_participant_joined")
     async def _on_join(transport, participant):
