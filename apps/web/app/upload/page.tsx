@@ -12,11 +12,24 @@
 //   a person who has died cannot go back and retake anything, so telling them
 //   at the end which twelve pictures were unusable is far worse than telling
 //   them one at a time while they still have the folder open.
+//
+//   It states, at the moment the likeness appears, how much of it was measured
+//   from what they uploaded and how much was generated. A family whose father
+//   is 40% invented is told so on the screen where they first see him, not in
+//   terms nobody reads.
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, type PhotoSet, type Requirements } from "@/lib/gateway";
+import {
+  api,
+  ApiError,
+  type PhotoSet,
+  type Requirements,
+  type SplatJob,
+  type SplatRefusal,
+  type SplatRoute,
+} from "@/lib/gateway";
 
 const REASON_TEXT: Record<string, string> = {
   "resolution below 512px on the short edge": "Too small",
@@ -31,6 +44,9 @@ export default function Upload() {
   const [requirements, setRequirements] = useState<Requirements | null>(null);
   const [set, setSet] = useState<PhotoSet | null>(null);
   const [setId, setSetId] = useState<string | null>(null);
+  // Which person this upload is for, taken from the link that brought them
+  // here. Without it there is nothing to attach a finished likeness to.
+  const [avatarId, setAvatarId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -39,6 +55,19 @@ export default function Upload() {
   const [builtAvatarId, setBuiltAvatarId] = useState<string | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
   const [videoStatus, setVideoStatus] = useState<string | null>(null);
+
+  // The 3D likeness. Kept apart from the training job above because it is a
+  // different build with a different floor: a short clip that cannot train a
+  // LoRA can still be reconstructed into a splat, so the two buttons enable
+  // and refuse independently.
+  const [splatJobId, setSplatJobId] = useState<string | null>(null);
+  const [splatStatus, setSplatStatus] = useState<string | null>(null);
+  const [splatProgress, setSplatProgress] = useState(0);
+  const [splatRoute, setSplatRoute] = useState<SplatRoute | null>(null);
+  const [splatReasoning, setSplatReasoning] = useState<string | null>(null);
+  const [splatResult, setSplatResult] = useState<SplatJob | null>(null);
+  const [splatRefusal, setSplatRefusal] = useState<SplatRefusal | null>(null);
+  const [splatError, setSplatError] = useState<string | null>(null);
   const videoInput = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLInputElement>(null);
 
@@ -56,6 +85,21 @@ export default function Upload() {
         setRequirements(await api.requirements());
         const created = await api.createPhotoSet();
         setSetId(created.id);
+
+        // The avatar this upload belongs to arrives in the query string —
+        // /avatars and /avatars/new both link here that way. Attaching the
+        // set to it is what makes a build possible at all: both the identity
+        // training and the likeness refuse a set that belongs to nobody,
+        // because neither has anywhere to put what it produces.
+        //
+        // Read off the location rather than through useSearchParams so this
+        // page needs no suspense boundary; the effect is client-only already.
+        const linked = new URLSearchParams(window.location.search).get("avatar");
+        if (linked) {
+          setAvatarId(linked);
+          await api.attachPhotoSet(linked, created.id);
+        }
+
         setSet(await api.readPhotoSet(created.id));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not start an upload");
@@ -140,6 +184,54 @@ export default function Upload() {
     }
   }
 
+  async function startLikeness() {
+    if (!setId) return;
+    setSplatError(null);
+    setSplatRefusal(null);
+    try {
+      const started = await api.buildSplat(setId);
+      if (!started.buildable) {
+        // Not an error, and deliberately not thrown. The customer is being
+        // told what else is needed, in counts they can check against their
+        // own folder, which is something they can act on.
+        setSplatRefusal(started);
+        return;
+      }
+      setSplatJobId(started.job_id);
+      setSplatStatus("running");
+      setSplatRoute(started.route);
+      setSplatReasoning(started.reasoning);
+      setSplatProgress(0.02);   // visible immediately, so the click clearly landed
+    } catch (e) {
+      setSplatError(e instanceof Error ? e.message : "Could not start the likeness");
+    }
+  }
+
+  // Poll the likeness build. The bar is an estimate from elapsed time — no
+  // splat optimiser reports its own progress — and it never reaches the end
+  // until the artefact exists.
+  useEffect(() => {
+    if (!splatJobId) return;
+    const timer = setInterval(async () => {
+      try {
+        const job = await api.splatJob(splatJobId);
+        setSplatStatus(job.status);
+        // Never let the bar go backwards on an out-of-order poll.
+        setSplatProgress((p) => Math.max(p, job.progress));
+        if (job.error) setSplatError(job.error);
+        if (job.route) setSplatRoute(job.route);
+        if (job.reasoning) setSplatReasoning(job.reasoning);
+        if (job.status === "succeeded") setSplatResult(job);
+        if (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled") {
+          clearInterval(timer);
+        }
+      } catch {
+        // A failed poll is not a failed build; keep polling.
+      }
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [splatJobId]);
+
   // Poll while a run is in flight. Training takes tens of minutes on a hosted
   // provider, so this is a status page, not a progress bar to wait in front of.
   useEffect(() => {
@@ -164,6 +256,12 @@ export default function Upload() {
   }, [jobId]);
 
   const accepted = set?.photos.filter((p) => p.accepted) ?? [];
+  const splatRunning = splatStatus === "running" || splatStatus === "queued";
+  const measured =
+    splatResult?.measured_fraction === null || splatResult?.measured_fraction === undefined
+      ? null
+      : Math.round(splatResult.measured_fraction * 100);
+  const generated = measured === null ? null : 100 - measured;
   const halfBody = accepted.filter((p) => p.half_body).length;
   const ready = set?.status === "ready";
   // Only blocking requirements can stop the build. Torso coverage changes
@@ -363,7 +461,35 @@ export default function Upload() {
               >
                 Build the avatar
               </button>
+              {/* Enabled on its own terms rather than on the training set's.
+                  The splat has a different floor - a short clip or three clear
+                  photographs is enough - and when it is not met the answer is
+                  a sentence saying what else we need, not a disabled button
+                  with no explanation. */}
+              <button
+                onClick={startLikeness}
+                disabled={splatRunning || accepted.length === 0 || !avatarId}
+                title={
+                  avatarId
+                    ? "Build the 3D likeness from what has been uploaded"
+                    : "Open this page from the person you are building, so the likeness has somewhere to go"
+                }
+                className="rounded-full border border-white/20 px-6 py-2.5 text-sm font-medium
+                           transition hover:bg-white/10 disabled:opacity-40"
+              >
+                Build the likeness
+              </button>
             </div>
+
+            {!avatarId && (
+              /* Reached without a person to build. Said plainly rather than
+                 left as two disabled buttons with no explanation. */
+              <p className="text-sm text-amber-200/90">
+                Start from the person&rsquo;s card so this upload has somewhere to go —
+                open <span className="text-neutral-200">Avatars</span> and choose
+                &ldquo;Add photographs&rdquo;.
+              </p>
+            )}
 
             {blockedBecause && (
               <p className="text-sm text-amber-200/90">
@@ -417,6 +543,131 @@ export default function Upload() {
                   >
                     Talk to them
                   </Link>
+                )}
+              </div>
+            )}
+
+            {/* Guidance, never an error style. Somebody who could only find
+                two photographs of their father has not done anything wrong,
+                and the counts are theirs so they can check them against the
+                folder still open beside this page. */}
+            {splatRefusal && (
+              <div className="space-y-2 rounded-xl border border-amber-400/25 bg-amber-400/5 p-5">
+                <p className="text-sm font-medium text-amber-100">
+                  We need a little more before we can build the likeness
+                </p>
+                <p className="text-sm text-neutral-200">{splatRefusal.guidance}</p>
+                <ul className="space-y-1 text-sm text-neutral-400">
+                  {splatRefusal.missing.map((item) => (
+                    <li key={item} className="flex gap-2">
+                      <span className="text-amber-300/70">•</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="pt-1 text-xs text-neutral-500">{splatRefusal.reasoning}</p>
+              </div>
+            )}
+
+            {splatStatus && (
+              <div className="space-y-3 rounded-xl border border-white/10 bg-white/5 p-5">
+                <div className="flex items-baseline justify-between gap-4">
+                  <span className="text-sm text-neutral-300">
+                    {splatStatus === "succeeded"
+                      ? splatRoute === "reconstruct"
+                        ? "The likeness is built, from your video"
+                        : "The likeness is built, from your photographs"
+                      : splatStatus === "failed"
+                        ? "Building the likeness failed"
+                        : splatStatus === "cancelled"
+                          ? "Building the likeness was stopped"
+                          : "Building the likeness…"}
+                  </span>
+                  <span className="tabular-nums text-xs text-neutral-500">
+                    {Math.round(splatProgress * 100)}%
+                  </span>
+                </div>
+
+                <div
+                  role="progressbar"
+                  aria-label="Likeness build"
+                  aria-valuenow={Math.round(splatProgress * 100)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  className="h-1.5 w-full overflow-hidden rounded-full bg-white/10"
+                >
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      splatStatus === "failed" ? "bg-red-500" : "bg-sky-400"
+                    }`}
+                    style={{ width: `${Math.max(2, splatProgress * 100)}%` }}
+                  />
+                </div>
+
+                {/* Which route built it, and why. The customer chose neither;
+                    what they were able to upload decided it, and saying so is
+                    what stops "why does this one look different" being a
+                    mystery six months later. */}
+                {splatReasoning && (
+                  <p className="text-sm text-neutral-400">{splatReasoning}</p>
+                )}
+
+                {splatRunning && (
+                  <p className="text-xs text-neutral-500">
+                    You can close this page — it keeps building.
+                  </p>
+                )}
+
+                {splatError && <p className="text-sm text-red-300">{splatError}</p>}
+
+                {/* The disclosure, at the moment the likeness appears. Not a
+                    footnote and not in terms: a photographs-only build invents
+                    the angles no camera covered, and the family reading this
+                    screen is the one entitled to know that first. */}
+                {splatResult?.disclosure && (
+                  <div className="space-y-3 rounded-lg border border-sky-400/25 bg-sky-400/5 p-4">
+                    <p className="text-sm leading-relaxed text-neutral-100">
+                      {splatResult.disclosure}
+                    </p>
+
+                    {measured !== null && generated !== null && (
+                      <>
+                        <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/10">
+                          <div
+                            className="h-full bg-emerald-400"
+                            style={{ width: `${measured}%` }}
+                          />
+                          <div
+                            className="h-full bg-amber-400/70"
+                            style={{ width: `${generated}%` }}
+                          />
+                        </div>
+                        <p className="tabular-nums text-xs text-neutral-300">
+                          <span className="text-emerald-300">{measured}% measured</span> from
+                          what you uploaded ·{" "}
+                          <span className="text-amber-200">{generated}% generated</span>
+                        </p>
+                      </>
+                    )}
+
+                    {splatResult.concerns.length > 0 && (
+                      <ul className="space-y-1 text-xs text-neutral-400">
+                        {splatResult.concerns.map((concern) => (
+                          <li key={concern} className="flex gap-2">
+                            <span className="text-neutral-600">•</span>
+                            <span>{concern}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {splatResult.gaussians > 0 && (
+                      <p className="tabular-nums text-xs text-neutral-500">
+                        {splatResult.gaussians.toLocaleString()} points ·{" "}
+                        {Math.round(splatResult.size_bytes / (1024 * 1024))}MB to download
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}

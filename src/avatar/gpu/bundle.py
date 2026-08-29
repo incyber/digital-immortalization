@@ -42,7 +42,21 @@ MUSETALK_FILES = {
     "facegeom/facegeom_core.py": "infra/facegeom/facegeom_core.py",
 }
 
-BUNDLES = {"serverless": SERVERLESS_FILES, "musetalk": MUSETALK_FILES}
+# The splat worker. Flat rather than nested because the bootstrap execs
+# handler.py from the top of APP_DIR, which puts that directory on sys.path -
+# so reconstruct.py and generate.py import each other by plain name, exactly as
+# they do in the repository.
+SPLAT_FILES = {
+    "handler.py": "infra/splatworker/handler.py",
+    "reconstruct.py": "infra/splatworker/reconstruct.py",
+    "generate.py": "infra/splatworker/generate.py",
+}
+
+BUNDLES = {
+    "serverless": SERVERLESS_FILES,
+    "musetalk": MUSETALK_FILES,
+    "splat": SPLAT_FILES,
+}
 
 
 @dataclass(frozen=True)

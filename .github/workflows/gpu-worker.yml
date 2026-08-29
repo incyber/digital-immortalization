@@ -13,6 +13,10 @@ on:
   workflow_dispatch:
     inputs:
       image:
+        # gpu-worker is LivePortrait and CosyVoice; splatworker is gsplat and
+        # TRELLIS, which is a second publishable image rather than a task on
+        # the first because it needs a CUDA devel base to compile kernels and
+        # its jobs run for minutes rather than seconds.
         description: Which image to build
         required: true
         default: gpu-worker
@@ -20,6 +24,7 @@ on:
         options:
           - gpu-worker
           - musetalk
+          - splatworker
           - probe
       tag:
         description: Image tag to publish

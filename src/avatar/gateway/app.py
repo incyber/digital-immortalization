@@ -28,8 +28,10 @@ from avatar.gateway.db import create_all, get_db
 from avatar.gateway.dispatch import LocalProcessDispatcher
 from avatar.gateway.routes_avatars import build_router as build_avatar_router
 from avatar.gateway.routes_ingest import build_router
+from avatar.gateway.routes_splat import build_router as build_splat_router
 from avatar.gateway.sessions import assert_production_ready, open_session
 from avatar.gateway.tenancy import TenantError
+from avatar.splat.service import SplatService, build_splat_builder
 from avatar.storage.factory import build_store
 from avatar.training.factory import build_runner
 
@@ -62,6 +64,10 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
     dispatcher = LocalProcessDispatcher(settings)
     store = build_store(settings)
     runner = build_runner(settings, store)
+    # A splat build outlives the request that starts it, so the service is
+    # given the session source rather than a session: it writes the outcome
+    # long after the response has gone.
+    splat = SplatService(build_splat_builder(settings, store), store, get_db)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -70,6 +76,9 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
         # Agents outlive a request but not the gateway. Leaving them running
         # would hold GPU capacity and microphones open after a restart.
         dispatcher.shutdown()
+        # Same rule for splat builds: a gateway going down must not leave a
+        # GPU optimising somebody's father with nothing watching it.
+        await splat.shutdown()
 
     app = FastAPI(title="Avatar gateway", lifespan=lifespan)
 
@@ -183,6 +192,7 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
     app.include_router(
         build_router(settings, current_user, get_db, store, runner)
     )
+    app.include_router(build_splat_router(current_user, get_db, splat))
 
     return app
 

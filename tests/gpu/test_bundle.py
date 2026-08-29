@@ -65,3 +65,27 @@ def test_every_bundle_has_the_entrypoint_the_bootstrap_will_exec():
     # bundle without one produces a worker that starts and then stops.
     for name in BUNDLES:
         assert "handler.py" in BUNDLES[name]
+
+
+def test_the_splat_worker_ships_both_routes_and_the_handler():
+    """A bundle missing a route produces a worker that fails one job in two."""
+    assert sorted(BUNDLES["splat"]) == ["generate.py", "handler.py", "reconstruct.py"]
+
+
+def test_the_splat_bundle_carries_every_file_in_the_worker_directory():
+    """A file we wrote that never ships is a file that silently does nothing.
+
+    The bundle table is explicit rather than globbed, which is right - it is
+    uploaded to storage a GPU executes - but the cost of an explicit list is
+    that a new module can be added beside the others and simply never arrive.
+    """
+    on_disk = {p.name for p in (ROOT / "infra/splatworker").glob("*.py")}
+
+    assert on_disk == set(BUNDLES["splat"])
+
+
+def test_the_splat_bundle_is_flat():
+    """The bootstrap execs handler.py from the top of APP_DIR, which is what
+    puts that directory on sys.path - so the three modules import each other by
+    plain name. Nesting any of them would break those imports at cold start."""
+    assert not [name for name in BUNDLES["splat"] if "/" in name]

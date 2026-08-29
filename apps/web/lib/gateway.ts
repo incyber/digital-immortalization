@@ -126,6 +126,76 @@ export type Avatar = PersonInput & {
   callable: boolean;
 };
 
+// --- the splat build ------------------------------------------------------
+//
+// Two routes, one artefact, and the customer chooses neither: whatever they
+// were able to upload decides it. The third outcome is a refusal, which is a
+// legitimate answer rather than a failure — it comes back 200 with a sentence
+// naming what is still needed, and the page shows it as guidance.
+
+export type SplatRoute = "reconstruct" | "generate";
+
+export type SplatRefusal = {
+  status: "refused";
+  buildable: false;
+  reasoning: string;
+  // What the customer must supply, itemised in their own counts.
+  missing: string[];
+  // The same thing as one sentence somebody can act on.
+  guidance: string;
+  considered: string[];
+};
+
+export type SplatStarted = {
+  status: "building";
+  buildable: true;
+  job_id: string;
+  avatar_id: string;
+  route: SplatRoute;
+  reasoning: string;
+  considered: string[];
+};
+
+export type SplatStart = SplatStarted | SplatRefusal;
+
+// Every shape that reports a finished likeness carries the disclosure and the
+// fraction of it that was actually measured. There is no response from this
+// API that hands back a likeness without them.
+export type SplatJob = {
+  id: string;
+  status: string;
+  backend: string;
+  progress: number;
+  error: string | null;
+  avatar_id: string | null;
+  splat_key: string | null;
+  route: SplatRoute | null;
+  reasoning: string | null;
+  disclosure: string | null;
+  measured_fraction: number | null;
+  generated_fraction: number | null;
+  concerns: string[];
+  gaussians: number;
+  size_bytes: number;
+};
+
+export type AvatarSplat = {
+  avatar_id: string;
+  built: boolean;
+  splat_key: string | null;
+  route: SplatRoute | null;
+  reasoning: string | null;
+  disclosure: string | null;
+  // null means no likeness has been built. It is never 0, which would be a
+  // claim that none of one was measured.
+  measured_fraction: number | null;
+  generated_fraction: number | null;
+  concerns: string[];
+  gaussians: number;
+  size_bytes: number;
+  backend: string | null;
+};
+
 export const api = {
   register: (email: string, password: string) =>
     request<{ id: string }>("/api/auth/register", {
@@ -225,6 +295,22 @@ export const api = {
     request<{ job_id: string; status: string }>(`/api/photo-sets/${id}/train`, {
       method: "POST",
     }),
+
+  // Starts the splat build, or explains what is missing. A refusal is not an
+  // error and does not throw: check `buildable` on what comes back.
+  buildSplat: (photoSetId: string) =>
+    request<SplatStart>(`/api/photo-sets/${photoSetId}/splat`, { method: "POST" }),
+
+  splatJob: (id: string) => request<SplatJob>(`/api/splat-jobs/${id}`),
+
+  cancelSplat: (id: string) =>
+    request<{ id: string; status: string }>(`/api/splat-jobs/${id}/cancel`, {
+      method: "POST",
+    }),
+
+  // What was built for this person and what must be said about it, long after
+  // the page that started the build has gone.
+  avatarSplat: (avatarId: string) => request<AvatarSplat>(`/api/avatars/${avatarId}/splat`),
 
   job: (id: string) =>
     request<{

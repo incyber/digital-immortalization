@@ -138,6 +138,13 @@ class Settings(BaseSettings):
     s3_access_key: str = ""
     s3_secret_key: str = ""
 
+    # Where a Gaussian splat is optimised. "fake" produces a plausible result
+    # instantly with no GPU, which is what lets the whole customer flow -
+    # routing, refusal, the progress bar, the disclosure a family reads - be
+    # built and tested before a card is rented; "runpod" is the real build.
+    # Same posture as renderer_backend and training_backend above.
+    splat_backend: str = "fake"
+
     # Identity training. "local" fakes a run so the flow can be built without
     # a GPU account; "replicate" is pay-per-run hosted training.
     training_backend: str = "local"

@@ -171,6 +171,38 @@ class Avatar(Base):
         nullable=True,
     )
 
+    # The Gaussian splat of this person, and what must be said about it.
+    #
+    # These live on the avatar rather than on the build job because the job is
+    # over in minutes and the disclosure is forever. A family reads "about 40%
+    # of this likeness was generated" on a page they open weeks later, not in
+    # the response to the request that started the build, so the sentence and
+    # the number that backs it are stored with the person they describe.
+    #
+    # splat_measured_fraction is nullable and never defaulted to zero: NULL is
+    # "no splat has been built", and 0.0 would be a claim that none of the
+    # likeness was measured. The two must not be the same value.
+    splat_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # "reconstruct" or "generate". See avatar/splat/routes.py.
+    splat_route: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Why that route, in the customer's language.
+    splat_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The sentence the customer is shown. Computed by the quality report from
+    # the route, never written by hand, so it cannot be softened.
+    splat_disclosure: Mapped[str | None] = mapped_column(Text, nullable=True)
+    splat_measured_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # What is weak about this build, as a JSON list. Support reads it when a
+    # family says it does not look like him.
+    splat_concerns: Mapped[str | None] = mapped_column(Text, nullable=True)
+    splat_gaussians: Mapped[int] = mapped_column(Integer, default=0)
+    # The customer's download: the splat renders in their own browser, so a
+    # file a phone will not fetch is a likeness nobody sees.
+    splat_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    splat_backend: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    splat_built_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     owner: Mapped[User] = relationship(back_populates="avatars")
