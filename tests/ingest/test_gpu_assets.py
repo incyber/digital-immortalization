@@ -25,11 +25,12 @@ def frame():
     return np.full((64, 64, 3), 128, dtype=np.uint8)
 
 
-def test_an_unconfigured_build_does_not_call_the_gpu(tmp_path, frame):
+@pytest.mark.asyncio
+async def test_an_unconfigured_build_does_not_call_the_gpu(tmp_path, frame):
     cfg = Settings(runpod_api_key="", runpod_endpoint_id="")
 
     assert is_configured(cfg) is False
-    assert attach_base_clip(cfg, tmp_path, frame) is None
+    assert await attach_base_clip(cfg, tmp_path, frame) is None
     assert not (tmp_path / "base.mp4").exists()
 
 
@@ -39,7 +40,8 @@ def test_rendering_without_an_endpoint_is_an_error_not_a_silence(frame):
         render_base_clip(Settings(runpod_api_key="k", runpod_endpoint_id=""), frame)
 
 
-def test_a_gpu_failure_leaves_the_avatar_callable(tmp_path, frame, monkeypatch):
+@pytest.mark.asyncio
+async def test_a_gpu_failure_leaves_the_avatar_callable(tmp_path, frame, monkeypatch):
     cfg = Settings(runpod_api_key="k", runpod_endpoint_id="e")
 
     def explode(*_args, **_kwargs):
@@ -47,14 +49,15 @@ def test_a_gpu_failure_leaves_the_avatar_callable(tmp_path, frame, monkeypatch):
 
     monkeypatch.setattr(gpu_assets, "render_base_clip", explode)
 
-    assert attach_base_clip(cfg, tmp_path, frame) is None
+    assert await attach_base_clip(cfg, tmp_path, frame) is None
     assert not (tmp_path / "base.mp4").exists()
 
 
-def test_a_rendered_clip_is_written_beside_the_assets(tmp_path, frame, monkeypatch):
+@pytest.mark.asyncio
+async def test_a_rendered_clip_is_written_beside_the_assets(tmp_path, frame, monkeypatch):
     monkeypatch.setattr(gpu_assets, "render_base_clip", lambda *a, **k: b"mp4-bytes")
 
-    clip = attach_base_clip(
+    clip = await attach_base_clip(
         Settings(runpod_api_key="k", runpod_endpoint_id="e"), tmp_path, frame
     )
 

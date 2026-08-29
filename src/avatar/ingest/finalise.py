@@ -103,7 +103,7 @@ async def finalise_avatar(
     # head motion rather than its existence. Returns None when no endpoint is
     # configured, which is every developer machine.
     if assets.base_rgb is not None:
-        attach_base_clip(cfg, destination, assets.base_rgb)
+        await attach_base_clip(cfg, destination, assets.base_rgb)
 
     avatar.assets_key = str(destination)
     avatar.framing = framing.value

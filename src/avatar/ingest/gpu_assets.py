@@ -15,6 +15,7 @@ every test is in. Nothing here is on the turn path; this is signup-time work.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import pickle
 import tempfile
@@ -31,6 +32,12 @@ from avatar.ingest.idle_motion import IdleStyle, build_idle_template
 # enough that a build is seconds of GPU rather than minutes: LivePortrait costs
 # roughly real time per frame, and this is billed by the second.
 CLIP_SECONDS = 6.0
+
+# The longest an avatar build will wait for the GPU. Deliberately far below the
+# platform's own execution timeout: a build is a person watching a progress bar,
+# and fifteen minutes of that is indistinguishable from a hang. If the clip is
+# not ready by then the avatar ships without head motion.
+BUILD_WAIT_S = 240
 
 # What the source photograph is encoded at before upload. The worker downsizes
 # to 1024 on the long edge anyway; sending less than this loses detail the crop
@@ -88,7 +95,7 @@ def render_base_clip(
             "image": base64.b64encode(encoded.tobytes()).decode("ascii"),
             "motion_template": base64.b64encode(template).decode("ascii"),
         },
-        wait_s=cfg.runpod_execution_timeout_s + 120,
+        wait_s=BUILD_WAIT_S,
     )
 
     output = result.output or {}
@@ -105,7 +112,7 @@ def render_base_clip(
     return base64.b64decode(video)
 
 
-def attach_base_clip(
+async def attach_base_clip(
     cfg: Settings,
     destination: Path,
     base_rgb: np.ndarray,
@@ -117,12 +124,17 @@ def attach_base_clip(
     Failure here does not fail the build. The plate assets are already written
     and already callable by the time this is reached, so a GPU outage costs the
     avatar its head motion rather than its existence.
+
+    Async, and the blocking client runs on a thread. The first version called
+    it directly from the gateway's event loop, where its polling sleep stopped
+    every other request in the process - including the one asking how the build
+    was going.
     """
     if not is_configured(cfg):
         return None
 
     try:
-        video = render_base_clip(cfg, base_rgb, style=style)
+        video = await asyncio.to_thread(render_base_clip, cfg, base_rgb, style=style)
     except Exception as exc:  # noqa: BLE001 - any GPU failure is non-fatal here
         logger.warning(f"no base clip for {destination.name}: {exc}")
         return None
