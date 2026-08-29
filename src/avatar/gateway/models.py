@@ -83,6 +83,50 @@ class Posture(str, enum.Enum):
     STOOPED = "stooped"
 
 
+class SpeechPace(str, enum.Enum):
+    """How fast they talked.
+
+    Reaches the prompt as an instruction about sentence length, which is the
+    only place it can land: nothing in the speech pipeline takes a rate, so a
+    dial claiming to slow the voice down would be a dial that does nothing.
+    """
+
+    SLOW = "slow"
+    MEASURED = "measured"
+    QUICK = "quick"
+
+
+class Humour(str, enum.Enum):
+    """Whether they joked, and how.
+
+    NONE is a real answer and is why this is an enum rather than free text:
+    "they were not a joker" has to be sayable, and it is a different state
+    from an unanswered column. A recreation that quips at somebody's father's
+    expense when he never did is the complaint that gets made out loud.
+    """
+
+    NONE = "none"
+    DRY = "dry"
+    WARM = "warm"
+    PLAYFUL = "playful"
+
+
+class Directness(str, enum.Enum):
+    """Whether they said the thing or came at it sideways."""
+
+    BLUNT = "blunt"
+    PLAIN = "plain"
+    GENTLE = "gentle"
+
+
+# Volume is deliberately not a column here, although families describe it
+# readily. Loudness comes from the voice recording, which is cloned; with no
+# recording the stock voice has one loudness and nothing in synthesis takes a
+# gain. A dial that changed neither the words nor the sound would be a
+# question asked for nothing, and every question asked for nothing is one more
+# field between a family and their father.
+
+
 # Deliberately wide. The job is to refuse nonsense -- a zero, a typo with an
 # extra digit -- not to second-guess a family, and the person being recreated
 # is not always an adult. Turning away somebody's true number would be worse
@@ -129,6 +173,64 @@ class Avatar(Base):
     voice_description: Mapped[str] = mapped_column(Text, default="")
     # Optional. What the recreation should decline to do or claim.
     boundaries: Mapped[str] = mapped_column(Text, default="")
+
+    # How the person came across, in the family's words. Every column below is
+    # optional and empty by default, and an avatar with none of them answered
+    # is built and spoken to exactly as it was before they existed.
+    #
+    # They are separate columns rather than more biography because each is
+    # rendered differently into the prompt - see persona.py. A phrase has to
+    # be quoted as an example, a subject to avoid has to be a trailing
+    # instruction, and a pace has to become an instruction about sentence
+    # length. None of that can be recovered from prose by a small model.
+    #
+    # Nothing here is ever pre-filled by the product. See gateway/defaults.py:
+    # a starting tone is a default, a fact about a specific dead person is
+    # not, and the boundary between them is enforced there rather than left to
+    # whoever writes the form copy.
+
+    # Phrases they actually used, as a JSON list. The single strongest field
+    # of the set: a family recognises a saying instantly, and it is the one
+    # thing a model can imitate literally. Also the most dangerous, which is
+    # why the prompt frames it as examples - recited, it becomes a parody.
+    characteristic_phrases: Mapped[str] = mapped_column(Text, default="")
+
+    # Habits, verbal and physical. Shapes speech only: a described facial
+    # mannerism does not reach the face. See MANNERISM_MOTION_LIMIT in
+    # persona.py, which spells out exactly why and what it would take.
+    mannerisms: Mapped[str] = mapped_column(Text, default="")
+
+    # What they always steered back to. Changes what the recreation talks
+    # about unprompted, which is most of what makes a conversation feel like
+    # a person rather than a question-answering service.
+    topics_loved: Mapped[str] = mapped_column(Text, default="")
+
+    # What must not be raised. Kept apart from boundaries on purpose: that
+    # column governs what the recreation may claim about itself, this one
+    # governs what a grieving family cannot bear to hear, and they are written
+    # by different people at different times.
+    topics_to_avoid: Mapped[str] = mapped_column(Text, default="")
+
+    # Who is on the other end - "his daughter", "her youngest son". Changes
+    # the register of every sentence, and cannot be guessed: the account
+    # holder is not always the person who will sit down in front of it.
+    caller_relationship: Mapped[str] = mapped_column(String(255), default="")
+
+    # The three dials. Nullable rather than empty-defaulted, because for these
+    # "not stated" and a stated value are both meaningful and must not
+    # collapse: humour NONE is "they did not joke", NULL is "nobody told us".
+    speech_pace: Mapped[SpeechPace | None] = mapped_column(
+        Enum(SpeechPace, native_enum=False, values_callable=lambda e: [m.value for m in e]),
+        nullable=True,
+    )
+    speech_humour: Mapped[Humour | None] = mapped_column(
+        Enum(Humour, native_enum=False, values_callable=lambda e: [m.value for m in e]),
+        nullable=True,
+    )
+    speech_directness: Mapped[Directness | None] = mapped_column(
+        Enum(Directness, native_enum=False, values_callable=lambda e: [m.value for m in e]),
+        nullable=True,
+    )
 
     # Set once the photo set has trained and assets have been built.
     photo_set_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

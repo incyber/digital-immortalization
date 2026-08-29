@@ -8,11 +8,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from avatar.gateway.defaults import defaults_payload
 from avatar.gateway.erasure import erase_account, erase_avatar
 from avatar.gateway.models import (
     MAX_HEIGHT_CM,
@@ -21,14 +22,23 @@ from avatar.gateway.models import (
     BodyBuild,
     ConsentRecord,
     ConsentStatus,
+    Directness,
+    Humour,
     PhotoSet,
     Posture,
     Shoulders,
+    SpeechPace,
     body_shape,
 )
 from avatar.gateway.tenancy import TenantError, assert_owned, owned_query
 from avatar.ingest.voice import ACCEPTED_TYPES, inspect_voice, normalise
-from avatar.persona import InvalidProfile, persona_from_avatar
+from avatar.persona import (
+    MAX_PHRASES,
+    InvalidProfile,
+    decode_phrases,
+    encode_phrases,
+    persona_from_avatar,
+)
 from avatar.safety.crisis_lines import UnsupportedCountry, parse_attested, selectable
 from avatar.services.voices import UnsupportedLocale, supported
 from avatar.storage.keys import voice_key
@@ -36,6 +46,10 @@ from avatar.storage.keys import voice_key
 # Two minutes of audio at any sane bitrate. Past this something other than a
 # voice reference is being uploaded.
 MAX_VOICE_BYTES = 40 * 1024 * 1024
+
+# Long enough for anything anybody actually said out loud, short enough that
+# five of them together cannot crowd out the rest of the prompt.
+MAX_PHRASE_CHARS = 160
 
 
 class AvatarInput(BaseModel):
@@ -63,6 +77,45 @@ class AvatarInput(BaseModel):
     shoulders: Shoulders | None = None
     posture: Posture | None = None
 
+    # How the person came across. Optional in exactly the way the body
+    # questions are: a family that answers none of it gets the same avatar it
+    # would have got before any of these existed.
+    #
+    # The lengths are limits on the prompt, not opinions about how much
+    # somebody may say about their father. A small model handed a long prompt
+    # stops speaking in character and starts reporting its instructions - see
+    # persona.py - so the budget is real. It is enforced here, where an
+    # over-long answer is refused while the person can still shorten it,
+    # rather than by truncating their words somewhere they will never see.
+    characteristic_phrases: list[str] | None = Field(default=None, max_length=MAX_PHRASES)
+    mannerisms: str | None = Field(default=None, max_length=600)
+    topics_loved: str | None = Field(default=None, max_length=400)
+    topics_to_avoid: str | None = Field(default=None, max_length=400)
+    caller_relationship: str | None = Field(default=None, max_length=120)
+    speech_pace: SpeechPace | None = None
+    speech_humour: Humour | None = None
+    speech_directness: Directness | None = None
+
+    @field_validator("characteristic_phrases")
+    @classmethod
+    def _phrases_are_sayings_not_paragraphs(cls, value: list[str] | None) -> list[str] | None:
+        """Refuse a phrase that is really a monologue.
+
+        A saying is short by definition, and something long pasted in here is
+        a biography in the wrong box - where it would be quoted back verbatim
+        as a line the person used to say.
+        """
+        if value is None:
+            return None
+        cleaned = [phrase.strip() for phrase in value if phrase and phrase.strip()]
+        for phrase in cleaned:
+            if len(phrase) > MAX_PHRASE_CHARS:
+                raise ValueError(
+                    "a characteristic phrase is something they said, not a "
+                    f"paragraph; keep each one under {MAX_PHRASE_CHARS} characters"
+                )
+        return cleaned
+
 
 class ConsentInput(BaseModel):
     rights_holder_name: str = Field(min_length=1, max_length=255)
@@ -81,6 +134,19 @@ SELF_RELATIONSHIP = "self"
 _BODY_FIELDS = ("height_cm", "build", "shoulders", "posture")
 
 
+# Stored as text, so an omitted field leaves what is there and an explicit
+# null clears it back to unanswered.
+_MANNER_TEXT_FIELDS = (
+    "mannerisms",
+    "topics_loved",
+    "topics_to_avoid",
+    "caller_relationship",
+)
+
+# Stored as enums, where null is itself the unanswered state.
+_MANNER_CHOICE_FIELDS = ("speech_pace", "speech_humour", "speech_directness")
+
+
 def _apply_body(avatar: Avatar, body: AvatarInput) -> None:
     """Copy across only the body attributes this request actually carried.
 
@@ -92,6 +158,49 @@ def _apply_body(avatar: Avatar, body: AvatarInput) -> None:
     for field in _BODY_FIELDS:
         if field in body.model_fields_set:
             setattr(avatar, field, getattr(body, field))
+
+
+def _apply_manner(avatar: Avatar, body: AvatarInput) -> None:
+    """Copy across only the manner this request actually carried.
+
+    Same rule as _apply_body, and it matters more here: these are the fields a
+    family fills in slowly, weeks apart, as they remember things. A client
+    that does not know about a field must not be able to erase it by not
+    sending it.
+    """
+    for name in _MANNER_TEXT_FIELDS:
+        if name in body.model_fields_set:
+            value = getattr(body, name)
+            setattr(avatar, name, (value or "").strip())
+
+    for name in _MANNER_CHOICE_FIELDS:
+        if name in body.model_fields_set:
+            setattr(avatar, name, getattr(body, name))
+
+    if "characteristic_phrases" in body.model_fields_set:
+        avatar.characteristic_phrases = encode_phrases(body.characteristic_phrases)
+
+
+def _manner(avatar: Avatar) -> dict:
+    """What the family said about how the person came across.
+
+    Read back in the shape it was sent, so a form can be reopened on it. The
+    dials report null for unanswered, which stays distinct from humour "none"
+    - "nobody told us" and "they did not joke" are different facts about
+    somebody's father.
+    """
+    return {
+        "characteristic_phrases": list(decode_phrases(avatar.characteristic_phrases)),
+        "mannerisms": avatar.mannerisms,
+        "topics_loved": avatar.topics_loved,
+        "topics_to_avoid": avatar.topics_to_avoid,
+        "caller_relationship": avatar.caller_relationship,
+        "speech_pace": avatar.speech_pace.value if avatar.speech_pace else None,
+        "speech_humour": avatar.speech_humour.value if avatar.speech_humour else None,
+        "speech_directness": (
+            avatar.speech_directness.value if avatar.speech_directness else None
+        ),
+    }
 
 
 def _describe(avatar: Avatar, attested: frozenset[str]) -> dict:
@@ -112,6 +221,7 @@ def _describe(avatar: Avatar, attested: frozenset[str]) -> dict:
         "voice_description": avatar.voice_description,
         "boundaries": avatar.boundaries,
         "body": body_shape(avatar),
+        "manner": _manner(avatar),
         "photo_set_id": avatar.photo_set_id,
         "has_assets": bool(avatar.assets_key),
         "has_voice": bool(avatar.voice_key),
@@ -161,6 +271,23 @@ def build_router(settings, current_user, get_db, store) -> APIRouter:
             ]
         }
 
+    @router.get("/api/avatars/defaults")
+    async def defaults(request: Request):
+        """What the create form can be opened with.
+
+        Declared before /api/avatars/{avatar_id} because routes are matched in
+        order and "defaults" would otherwise be read as an avatar id.
+
+        Unauthenticated, like /api/countries and /api/languages beside it: it
+        describes the form rather than anybody's data, and it must be
+        answerable before an account has anything in it.
+
+        Everything here shapes tone or comes from the request. Nothing here is
+        a fact about a person - see defaults.py, where that boundary is a set
+        of field names checked in code rather than a line in the copy.
+        """
+        return defaults_payload(request.headers, attested)
+
     @router.post("/api/avatars", status_code=201)
     async def create(
         body: AvatarInput,
@@ -177,6 +304,7 @@ def build_router(settings, current_user, get_db, store) -> APIRouter:
             boundaries=body.boundaries.strip(),
         )
         _apply_body(avatar, body)
+        _apply_manner(avatar, body)
 
         # Validated before it is stored, so an avatar that could never be
         # spoken to is never created in the first place.
@@ -228,6 +356,7 @@ def build_router(settings, current_user, get_db, store) -> APIRouter:
         avatar.voice_description = body.voice_description.strip()
         avatar.boundaries = body.boundaries.strip()
         _apply_body(avatar, body)
+        _apply_manner(avatar, body)
 
         try:
             persona_from_avatar(avatar, attested)
