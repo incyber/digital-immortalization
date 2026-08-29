@@ -20,9 +20,35 @@ from dataclasses import dataclass, field, fields
 
 import numpy as np
 
-# How many mouth shapes the viseme layer produces. Matches the existing 2D
-# renderer so one director can drive either.
-VISEME_COUNT = 15
+# The mouth shapes, named and ordered. This tuple is the single source of
+# truth, and it exists because its absence was a real latent bug: the slots
+# were an unnamed tuple of fifteen floats, so every consumer had to guess which
+# sound each one meant. A permuted guess is a mouth making the wrong shape for
+# every word - and subtle enough to survive a demo, which is the worst kind of
+# wrong.
+#
+# The set is the standard fifteen: silence, then the visually distinct
+# consonant and vowel groups. Sounds that look identical share a slot, because
+# a viewer reads lips by shape and /p/, /b/ and /m/ are one shape.
+VISEME_NAMES: tuple[str, ...] = (
+    "sil",   # closed, at rest
+    "PP",    # p, b, m - lips pressed
+    "FF",    # f, v - lip against teeth
+    "TH",    # th - tongue between teeth
+    "DD",    # d, t, n - tongue behind teeth
+    "kk",    # k, g - back of tongue, little visible
+    "CH",    # ch, j, sh - rounded and forward
+    "SS",    # s, z - narrow, teeth close
+    "nn",    # n, l - tongue up
+    "RR",    # r - rounded, slight pucker
+    "aa",    # father - open
+    "E",     # bed - mid
+    "ih",    # bit - narrow
+    "oh",    # boat - rounded
+    "ou",    # boot - tight and rounded
+)
+
+VISEME_COUNT = len(VISEME_NAMES)
 
 # Sum of all viseme weights. Slightly above one because adjacent shapes overlap
 # during a transition; far above one and the mouth tears.
