@@ -48,9 +48,11 @@ export interface PoseChannel {
  * second for the length of a call.
  */
 export function usePoseChannel(): PoseChannel {
-  const receiverRef = useRef<PoseReceiver | null>(null);
-  if (receiverRef.current === null) receiverRef.current = createPoseReceiver();
-  const receiver = receiverRef.current;
+  // State rather than a ref, and the factory passed rather than called: this
+  // is the one form that builds exactly one receiver per mount without
+  // reading a ref while rendering. The setter is discarded — the receiver is
+  // an identity, and replacing it would mean forgetting the head's position.
+  const [receiver] = useState<PoseReceiver>(createPoseReceiver);
 
   const [pose, setPose] = useState<HeadPose>(NEUTRAL);
   const scheduled = useRef<number | null>(null);
@@ -86,6 +88,8 @@ export function usePoseChannel(): PoseChannel {
 export interface SplatLikenessProps {
   url: string;
   credentials: RequestCredentials;
+  /** Stable reference only; see SplatStage. */
+  headers?: Record<string, string>;
   pose: HeadPose;
   /**
    * The asset cannot be drawn on this device — it failed to load, or the
@@ -99,6 +103,7 @@ export interface SplatLikenessProps {
 export function SplatLikeness({
   url,
   credentials,
+  headers,
   pose,
   onUnavailable,
   className = "",
@@ -114,6 +119,7 @@ export function SplatLikeness({
     <SplatStage
       url={url}
       credentials={credentials}
+      headers={headers}
       pose={pose}
       framing={CALL_FRAMING}
       onStatus={handleStatus}

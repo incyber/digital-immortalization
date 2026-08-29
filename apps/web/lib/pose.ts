@@ -105,21 +105,21 @@ export const POSE_CHANNELS = [
   /*  2 */ "head_roll", // degrees, + tips the crown toward the viewer's right
   /*  3 */ "gaze_yaw", // degrees, eyes relative to the head
   /*  4 */ "gaze_pitch", // degrees, eyes relative to the head
-  /*  5 */ "blink_left", // 0 open .. 1 shut
-  /*  6 */ "blink_right", // 0 open .. 1 shut
-  /*  7 */ "lid_upper_left", // 0 neutral .. 1 raised
-  /*  8 */ "lid_upper_right", // 0 neutral .. 1 raised
-  /*  9 */ "lid_lower_left", // 0 neutral .. 1 squinted
-  /* 10 */ "lid_lower_right", // 0 neutral .. 1 squinted
-  /* 11 */ "brow_inner_up", // 0 neutral .. 1 raised
-  /* 12 */ "brow_outer_up", // 0 neutral .. 1 raised
-  /* 13 */ "brow_down", // 0 neutral .. 1 furrowed
-  /* 14 */ "jaw_open", // 0 shut .. 1 open
-  /* 15 */ "smile_left", // 0 neutral .. 1 full
-  /* 16 */ "smile_right", // 0 neutral .. 1 full
-  /* 17 */ "mouth_press", // 0 neutral .. 1 pressed
-  /* 18 */ "torso_lean", // degrees, + leans toward the viewer
-  /* 19 */ "breath", // 0 .. 1, chest expansion through one breath
+  /*  5 */ "blink", // 0 open .. 1 shut
+  /*  6 */ "lid_upper_l", // -1 .. 1
+  /*  7 */ "lid_upper_r", // -1 .. 1
+  /*  8 */ "brow_inner_l", // -1 .. 1
+  /*  9 */ "brow_inner_r", // -1 .. 1
+  /* 10 */ "brow_outer_l", // -1 .. 1
+  /* 11 */ "brow_outer_r", // -1 .. 1
+  /* 12 */ "jaw_open", // 0 .. 1
+  /* 13 */ "mouth_smile_l", // -1 .. 1
+  /* 14 */ "mouth_smile_r", // -1 .. 1
+  /* 15 */ "mouth_press", // 0 .. 1
+  /* 16 */ "torso_lean", // -1 .. 1
+  /* 17 */ "torso_yaw", // -0.4 .. 0.4
+  /* 18 */ "shoulder_raise", // 0 .. 1
+  /* 19 */ "breath", // 0 .. 1
 ] as const;
 
 /**
@@ -140,9 +140,9 @@ export const POSE_VISEMES = [
   /*  9 */ "RR",
   /* 10 */ "aa",
   /* 11 */ "E",
-  /* 12 */ "I",
-  /* 13 */ "O",
-  /* 14 */ "U",
+  /* 12 */ "ih",
+  /* 13 */ "oh",
+  /* 14 */ "ou",
 ] as const;
 
 export const CHANNEL_HEAD_YAW = 0;

@@ -116,6 +116,12 @@ export interface SplatViewerOptions {
    * caller reading the asset back through its own API passes "include".
    */
   credentials?: RequestCredentials;
+  /**
+   * Extra request headers for the asset fetch. Only ever what an authenticated
+   * API insists on; a signed store URL wants none, and sending some to one
+   * costs a preflight for nothing.
+   */
+  headers?: Record<string, string>;
   onStatus?: (status: SplatStatus) => void;
   onFrameStats?: (stats: FrameStats) => void;
 }
@@ -282,9 +288,10 @@ async function downloadWithProgress(
   url: string,
   signal: AbortSignal,
   credentials: RequestCredentials,
+  headers: Record<string, string> | undefined,
   onProgress: (loaded: number, total: number | null) => void,
 ): Promise<Downloaded> {
-  const response = await fetch(url, { signal, mode: "cors", credentials });
+  const response = await fetch(url, { signal, mode: "cors", credentials, headers });
   if (!response.ok) {
     throw new Error(`Server answered ${response.status} ${response.statusText}`);
   }
@@ -400,6 +407,7 @@ export function createSplatViewer(options: SplatViewerOptions): SplatViewer {
     url,
     maxPixelRatio = 2,
     credentials = "omit",
+    headers,
     onStatus,
     onFrameStats,
   } = options;
@@ -609,13 +617,19 @@ export function createSplatViewer(options: SplatViewerOptions): SplatViewer {
 
     let loadedMesh: SplatMesh;
     if (isSingleFileAsset(url)) {
-      const { bytes } = await downloadWithProgress(url, abort.signal, credentials, (loaded, total) => {
-        publish({
-          bytesLoaded: loaded,
-          bytesTotal: total,
-          percent: percentOf(loaded, total),
-        });
-      });
+      const { bytes } = await downloadWithProgress(
+        url,
+        abort.signal,
+        credentials,
+        headers,
+        (loaded, total) => {
+          publish({
+            bytesLoaded: loaded,
+            bytesTotal: total,
+            percent: percentOf(loaded, total),
+          });
+        },
+      );
       if (disposed) return;
       const downloadMs = Math.round(performance.now() - downloadStarted);
       publish({ phase: "decoding", downloadMs, bytesLoaded: bytes.byteLength, percent: 100 });
@@ -638,7 +652,8 @@ export function createSplatViewer(options: SplatViewerOptions): SplatViewer {
     } else {
       // A multi-file bundle: the renderer must resolve the siblings itself, so
       // byte progress is genuinely unavailable and is left null rather than
-      // faked. It also cannot carry `credentials`: the renderer issues those
+      // faked. It also cannot carry `credentials` or `headers`: the renderer
+      // issues those
       // requests itself, so a multi-file bundle has to be reachable by a
       // signed URL rather than through an authenticated API. This branch is
       // additionally NOT abortable — the transfer happens inside

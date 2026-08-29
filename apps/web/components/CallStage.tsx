@@ -112,6 +112,7 @@ function PoseDrivenLikeness({
     <SplatLikeness
       url={asset.url}
       credentials={asset.credentials}
+      headers={asset.headers}
       pose={pose}
       onUnavailable={onUnavailable}
     />

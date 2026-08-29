@@ -36,6 +36,11 @@ export interface SplatStageProps {
   /** Credential mode for the asset fetch. See SplatViewerOptions. */
   credentials?: RequestCredentials;
   /**
+   * Extra headers for the asset fetch. Must be a stable reference — the viewer
+   * is keyed on it, so a fresh object each render would restart the download.
+   */
+  headers?: Record<string, string>;
+  /**
    * Measured frame rate, reported roughly twice a second. This is the number
    * the device-side rendering decision turns on, so it is a first-class
    * output of the component rather than something to read off a dev tool.
@@ -53,6 +58,7 @@ export function SplatStage({
   pose,
   framing,
   credentials = "omit",
+  headers,
   onFrameStats,
   onStatus,
   maxPixelRatio = 2,
@@ -109,6 +115,7 @@ export function SplatStage({
       framing: framingRef.current,
       maxPixelRatio,
       credentials,
+      headers,
       onStatus: handleStatus,
       onFrameStats: handleFrameStats,
     });
@@ -118,7 +125,7 @@ export function SplatStage({
       viewerRef.current = null;
       viewer.dispose();
     };
-  }, [url, maxPixelRatio, credentials, handleStatus, handleFrameStats]);
+  }, [url, maxPixelRatio, credentials, headers, handleStatus, handleFrameStats]);
 
   // Pose and framing are pushed imperatively. Routing them through the effect
   // that owns the viewer would tie a slider drag to a full reload. These stay
