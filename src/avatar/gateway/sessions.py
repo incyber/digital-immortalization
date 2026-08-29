@@ -115,9 +115,15 @@ MIN_SECRET_BYTES = 32
 def assert_production_ready(cfg: Settings) -> None:
     """Refuse to start with development credentials.
 
-    Called from the deployment entry point, not from create_app, so tests and
+    Called from create_app when PRODUCTION is set, and only then - so tests and
     local runs are unaffected while a cloud start with a leftover .env fails
     loudly instead of serving signed tokens anyone can forge.
+
+    It used to be called from nowhere at all. It had passing unit tests, which
+    proved its logic was right and said nothing about whether it ran, and an
+    audit found it dead. That is the second time in this project a safety
+    check has been described as protection while never executing, so the test
+    that matters now is the one asserting create_app calls it.
     """
     if (cfg.livekit_api_key, cfg.livekit_api_secret) in DEV_CREDENTIALS:
         raise ValueError(

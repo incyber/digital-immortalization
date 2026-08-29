@@ -150,6 +150,12 @@ class Settings(BaseSettings):
     # http://localhost is not a secure origin and the cookie would be dropped.
     cookies_secure: bool = False
 
+    # Whether this is a real deployment. The only thing it changes is that the
+    # development-credential check becomes fatal instead of advisory, so a
+    # cloud start with a leftover .env refuses rather than serving tokens
+    # anyone can forge.
+    production: bool = False
+
     # Origins allowed to call the gateway. Listed explicitly rather than
     # wildcarded because these responses carry room tokens. The dev port is
     # pinned high to avoid colliding with whatever else is on 3000.

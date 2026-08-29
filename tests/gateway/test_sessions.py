@@ -156,3 +156,51 @@ def test_the_session_cookie_works_cross_site_when_deployed():
 
     assert "samesite=none" in header
     assert "secure" in header
+
+
+def test_create_app_refuses_to_start_in_production_with_dev_credentials():
+    """The check used to exist and never run.
+
+    It had passing unit tests proving its logic, which said nothing about
+    whether anything called it. An audit found it dead. This is the test that
+    would have caught that, and it asserts the wiring rather than the logic.
+    """
+    from avatar.config import Settings
+    from avatar.gateway.app import create_app
+
+    cfg = Settings(
+        _env_file=None,
+        production=True,
+        livekit_api_key="devkey",
+        livekit_api_secret="secret",
+    )
+
+    with pytest.raises(ValueError, match="development secret"):
+        create_app(cfg)
+
+
+def test_create_app_starts_normally_when_not_in_production():
+    """Local runs and tests must be unaffected, or the check gets removed."""
+    from avatar.config import Settings
+    from avatar.gateway.app import create_app
+
+    assert create_app(Settings(_env_file=None, production=False)) is not None
+
+
+def test_the_browser_may_use_the_methods_the_product_exposes():
+    """Deleting a photo set is a DELETE, and editing an avatar is a PATCH.
+
+    Neither is a CORS simple method, so a browser preflights them. Omitting
+    them from allow_methods made both fail silently cross-origin, without ever
+    reaching this process.
+    """
+    from avatar.config import Settings
+    from avatar.gateway.app import create_app
+
+    app = create_app(Settings(_env_file=None))
+    cors = next(
+        m for m in app.user_middleware if "CORSMiddleware" in str(m.cls)
+    )
+    allowed = set(cors.kwargs["allow_methods"])
+
+    assert {"GET", "POST", "PATCH", "DELETE"} <= allowed

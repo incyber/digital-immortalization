@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from avatar.gateway.erasure import erase_account, erase_avatar
 from avatar.gateway.models import (
     MAX_HEIGHT_CM,
     MIN_HEIGHT_CM,
@@ -317,6 +318,50 @@ def build_router(settings, current_user, get_db, store) -> APIRouter:
             "seconds": round(verdict.duration_s, 1),
             "sample_rate": verdict.sample_rate,
             "quality": verdict.quality,
+        }
+
+    @router.delete("/api/avatars/{avatar_id}")
+    async def erase(
+        avatar_id: str,
+        db: AsyncSession = Depends(get_db),  # noqa: B008
+        user_id: str = Depends(current_user),
+    ):
+        """Remove a recreated person: images, voice, likeness, consent, calls.
+
+        A count is returned rather than a status. Somebody asking for their
+        father's photographs to be erased is owed a number, and support is owed
+        something they can check against a bucket.
+        """
+        try:
+            result = await erase_avatar(db, store, avatar_id, user_id)
+        except TenantError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        return {
+            "avatar_id": avatar_id,
+            "complete": result.complete,
+            "photographs": result.photos,
+            "files": result.blobs,
+            "calls": result.sessions,
+            # Present when something refused to go. Reporting a partial
+            # erasure as done is the one outcome that cannot be corrected
+            # afterwards, because nobody knows to look.
+            "failures": result.failures,
+        }
+
+    @router.delete("/api/account")
+    async def erase_everything(
+        db: AsyncSession = Depends(get_db),  # noqa: B008
+        user_id: str = Depends(current_user),
+    ):
+        """Remove the account and everything in it."""
+        result = await erase_account(db, store, user_id)
+        return {
+            "complete": result.complete,
+            "avatars": result.avatars,
+            "photographs": result.photos,
+            "files": result.blobs,
+            "failures": result.failures,
         }
 
     @router.post("/api/avatars/{avatar_id}/consent", status_code=201)

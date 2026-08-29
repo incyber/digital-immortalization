@@ -28,7 +28,7 @@ from avatar.gateway.db import create_all, get_db
 from avatar.gateway.dispatch import LocalProcessDispatcher
 from avatar.gateway.routes_avatars import build_router as build_avatar_router
 from avatar.gateway.routes_ingest import build_router
-from avatar.gateway.sessions import open_session
+from avatar.gateway.sessions import assert_production_ready, open_session
 from avatar.gateway.tenancy import TenantError
 from avatar.storage.factory import build_store
 from avatar.training.factory import build_runner
@@ -53,6 +53,12 @@ SESSION_COOKIE = "avatar_session"
 def create_app(cfg: Settings | None = None) -> FastAPI:
     settings = cfg or get_settings()
 
+    # Before anything is constructed. A deployment that reaches this line with
+    # development credentials is one where anyone can forge a session cookie or
+    # a room token, and refusing to boot is the only useful response.
+    if settings.production:
+        assert_production_ready(settings)
+
     dispatcher = LocalProcessDispatcher(settings)
     store = build_store(settings)
     runner = build_runner(settings, store)
@@ -74,7 +80,13 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        # PATCH and DELETE are needed by the product's own endpoints - editing
+        # an avatar and deleting a photo set - and neither is a CORS "simple"
+        # method, so a browser preflights them. Omitting them meant that in a
+        # cross-origin deployment, which is the one this app is being prepared
+        # for, "delete these photographs" failed silently in the browser and
+        # never reached this process at all.
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
 
