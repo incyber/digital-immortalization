@@ -18,6 +18,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from avatar.gateway.app import create_app
+from avatar.gateway.csrf import REQUIRED_HEADER, REQUIRED_VALUE
 from avatar.gateway.models import Base
 
 AVATAR = {
@@ -51,7 +52,12 @@ async def client(cfg, tmp_path):
     db_module._factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with AsyncClient(
-        transport=ASGITransport(app=create_app(cfg)), base_url="http://test"
+        transport=ASGITransport(app=create_app(cfg)),
+        base_url="http://test",
+        # Stands in for the header the web app's shared request() helper adds
+        # to every call - see gateway/csrf.py. Set once here rather than per
+        # call, same as the real client would.
+        headers={REQUIRED_HEADER: REQUIRED_VALUE},
     ) as c:
         yield c
     await engine.dispose()

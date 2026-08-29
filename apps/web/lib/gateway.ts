@@ -19,6 +19,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${GATEWAY}${path}`, {
     ...init,
     credentials: "include",
+    // A custom header on every call. Several endpoints take no body, and a
+    // bodyless POST is a request a browser sends cross-origin without asking
+    // first - so the session cookie would ride along on a form submitted by
+    // any other site. A custom header cannot be set that way, which is what
+    // makes it a defence rather than a decoration. The server requires it.
+    headers: { "x-avatar-client": "web", ...(init.headers ?? {}) },
   });
 
   if (!response.ok) {
@@ -209,7 +215,16 @@ export type SplatAsset = {
   // gateway route is a different origin from this page and needs the session
   // cookie, which is the only reason this is not a constant.
   credentials: RequestCredentials;
+  /** Sent with the request. Undefined for a store URL, which wants none. */
+  headers?: Record<string, string>;
 };
+
+// The same header request() sets, in a frozen shared object so that a caller
+// holding it across renders holds one identity. Anything that keys an effect
+// on these headers would otherwise rebuild a viewer on every render.
+const GATEWAY_HEADERS: Record<string, string> = Object.freeze({
+  "x-avatar-client": "web",
+});
 
 /**
  * The asset behind a built likeness, or null if there is not one to read.
@@ -225,6 +240,7 @@ export function splatAssetUrl(splat: AvatarSplat): SplatAsset | null {
   return {
     url: `${GATEWAY}/api/avatars/${splat.avatar_id}/splat/asset`,
     credentials: "include",
+    headers: GATEWAY_HEADERS,
   };
 }
 

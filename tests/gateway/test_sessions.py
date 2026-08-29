@@ -54,6 +54,26 @@ async def test_dev_secret_is_rejected_outside_development(cfg):
         assert_production_ready(cfg)
 
 
+async def test_a_self_attested_avatar_is_callable(db, cfg, avatar, owner):
+    # The honest case - recreating yourself - must not dead-end behind a
+    # review that a self-attestation deliberately skips.
+    from tests.gateway.helpers import set_status
+
+    await set_status(db, avatar, "self_attested")
+    out = await open_session(db, cfg, avatar.id, owner.id)
+    assert out["room"].startswith("call-")
+
+
+async def test_agent_is_dispatched_for_a_self_attested_avatar(db, cfg, avatar, owner):
+    from avatar.gateway.dispatch import NullDispatcher
+    from tests.gateway.helpers import set_status
+
+    await set_status(db, avatar, "self_attested")
+    dispatcher = NullDispatcher()
+    out = await open_session(db, cfg, avatar.id, owner.id, dispatcher)
+    assert dispatcher.calls == [(out["room"], avatar.id)]
+
+
 async def test_agent_is_dispatched_into_the_room(db, cfg, verified_avatar, owner):
     from avatar.gateway.dispatch import NullDispatcher
 

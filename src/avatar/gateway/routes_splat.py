@@ -28,6 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from avatar.gateway.csrf import require_same_site_header
 from avatar.gateway.models import Avatar
 from avatar.gateway.tenancy import TenantError, assert_owned
 from avatar.splat.build import SplatRefused
@@ -61,7 +62,11 @@ def _refusal(decision: RouteDecision) -> dict:
 def build_router(current_user, get_db, service: SplatService) -> APIRouter:
     router = APIRouter()
 
-    @router.post("/api/photo-sets/{photo_set_id}/splat", status_code=202)
+    @router.post(
+        "/api/photo-sets/{photo_set_id}/splat",
+        dependencies=[Depends(require_same_site_header)],
+        status_code=202,
+    )
     async def start(
         photo_set_id: str,
         db: AsyncSession = Depends(get_db),  # noqa: B008 - FastAPI injection idiom
@@ -109,7 +114,10 @@ def build_router(current_user, get_db, service: SplatService) -> APIRouter:
         except TenantError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @router.post("/api/splat-jobs/{job_id}/cancel")
+    @router.post(
+        "/api/splat-jobs/{job_id}/cancel",
+        dependencies=[Depends(require_same_site_header)],
+    )
     async def cancel(
         job_id: str,
         db: AsyncSession = Depends(get_db),  # noqa: B008 - FastAPI injection idiom

@@ -211,11 +211,10 @@ async def test_recreating_yourself_is_self_attested_and_callable_immediately(cli
     assert response.status_code == 201
     assert response.json()["status"] == "self_attested"
     assert response.json()["needs_review"] is False
-
-    # The honest case still works: the call is not blocked behind a review
-    # that would make self-recreation dead-end.
-    session = await client.post("/api/sessions", json={"avatar_id": avatar_id})
-    assert session.status_code != 403
+    # Callability itself - a self-attested record is not blocked behind a
+    # review that would make self-recreation dead-end - is exercised at the
+    # consent-gate and session layers in test_consent.py and test_sessions.py,
+    # rather than here, so this test does not dispatch a real agent process.
 
 
 async def test_self_attestation_is_case_insensitive(client):
@@ -262,6 +261,43 @@ async def test_anybody_elses_likeness_still_needs_review(client):
     )
     assert response.json()["status"] == "pending"
     assert response.json()["needs_review"] is True
+
+
+async def test_an_evidence_key_outside_the_tenants_prefix_is_rejected(client):
+    # Every other identifier in this codebase is validated against the
+    # tenant's own storage prefix before it is trusted; evidence_key is no
+    # exception - see storage/keys.belongs_to.
+    await sign_in(client)
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/consent",
+        json={
+            "rights_holder_name": "Ana Chen",
+            "relationship_to_subject": "daughter",
+            "jurisdiction": "US-WA",
+            "evidence_key": "tenants/somebody-elses-tenant-id/avatars/x/evidence.pdf",
+        },
+    )
+    assert response.status_code == 400
+
+
+async def test_an_evidence_key_inside_the_tenants_own_prefix_is_accepted(client):
+    from avatar.storage.keys import asset_key
+
+    await sign_in(client)
+    me = (await client.get("/api/me")).json()["id"]
+    avatar_id = (await client.post("/api/avatars", json=AVATAR)).json()["id"]
+    key = asset_key(me, avatar_id, "evidence.pdf")
+    response = await client.post(
+        f"/api/avatars/{avatar_id}/consent",
+        json={
+            "rights_holder_name": "Ana Chen",
+            "relationship_to_subject": "daughter",
+            "jurisdiction": "US-WA",
+            "evidence_key": key,
+        },
+    )
+    assert response.status_code == 201
 
 
 async def test_a_stranger_cannot_self_attest_on_your_avatar(client):
