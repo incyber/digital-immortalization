@@ -2,12 +2,72 @@
 
 // The account's avatars. Empty until the customer creates one — nothing ships
 // with a character in it.
+//
+// A grouped list, in Apple's sense: rows separated by hairlines rather than
+// each one drawn as its own card. What is on a row is what somebody would ask
+// about it — who they are, whether they can be called, and if not, what is
+// still needed.
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { controlClass } from "@/components/ui/Button";
+import { Notice } from "@/components/ui/Notice";
+import { Screen } from "@/components/ui/Screen";
 import { summarise } from "@/lib/body";
 import { api, ApiError, type Avatar } from "@/lib/gateway";
+
+function Row({ avatar }: { avatar: Avatar }) {
+  const body = summarise(avatar.body.stated);
+
+  const state = avatar.callable
+    ? null
+    : avatar.has_assets
+      ? "Waiting on the consent record before this call can open."
+      : avatar.photo_set_id
+        ? "Photographs added. They still need to be built into a likeness."
+        : "Add photographs, and they can be built.";
+
+  return (
+    <li className="py-6 first:pt-0 last:pb-0 [&+li]:border-t [&+li]:border-separator">
+      <div className="flex flex-wrap items-start justify-between gap-6">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-headline text-label">{avatar.display_name}</h2>
+          {avatar.biography && (
+            <p className="mt-1 line-clamp-2 text-subhead text-label-secondary">
+              {avatar.biography}
+            </p>
+          )}
+          {/* What the family said about the body, or plainly that they did
+              not. Neither reads as a thing left undone. */}
+          <p className="mt-2 text-footnote text-label-secondary">
+            {body ?? "Body not described — a neutral build is used."}
+          </p>
+          <p className="mt-1 text-footnote text-label-secondary">
+            {avatar.crisis_line
+              ? `Crisis line · ${avatar.crisis_line.name} (${avatar.crisis_line.number})`
+              : "Not usable yet"}
+          </p>
+          {state && <p className="mt-3 text-footnote text-label-secondary">{state}</p>}
+        </div>
+
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Link
+            href={`/upload?avatar=${avatar.id}`}
+            className={controlClass({ rank: "grey", small: true })}
+          >
+            {avatar.photo_set_id ? "Photographs" : "Add photographs"}
+          </Link>
+          {avatar.callable && (
+            <Link href={`/call/${avatar.id}`} className={controlClass({ rank: "filled", small: true })}>
+              Call
+            </Link>
+          )}
+        </div>
+      </div>
+    </li>
+  );
+}
 
 export default function Avatars() {
   const router = useRouter();
@@ -24,89 +84,33 @@ export default function Avatars() {
   }, [router]);
 
   return (
-    <main className="min-h-dvh bg-neutral-950 px-6 py-10 text-neutral-100">
-      <div className="mx-auto max-w-3xl space-y-8">
-        <header className="flex items-end justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Your avatars</h1>
-            <p className="mt-1.5 text-sm text-neutral-400">
-              Each one is a person you describe and provide photographs of.
-            </p>
-          </div>
-          <Link
-            href="/avatars/new"
-            className="shrink-0 rounded-full bg-white px-5 py-2.5 text-sm font-medium
-                       text-neutral-950 transition hover:bg-neutral-200"
-          >
-            New avatar
-          </Link>
-        </header>
+    <Screen
+      title="The people you have added."
+      lede="Each one was described by you, and built from what you gave us of them."
+      measure="wide"
+    >
+      {avatars === null && <p className="text-subhead text-label-secondary">One moment.</p>}
 
-        {avatars === null && <p className="text-sm text-neutral-500">Loading…</p>}
+      {avatars?.length === 0 && (
+        <Notice title="Nobody here yet.">
+          You will need their name, a few words about who they were, and photographs or a short
+          video of them.
+        </Notice>
+      )}
 
-        {avatars?.length === 0 && (
-          <div className="rounded-xl border border-white/10 bg-white/5 p-8 text-center">
-            <p className="text-neutral-300">You have not created an avatar yet.</p>
-            <p className="mx-auto mt-2 max-w-md text-sm text-neutral-500">
-              You will need a name, a short description of who they were, and 20–30
-              photographs.
-            </p>
-          </div>
-        )}
-
-        <ul className="space-y-3">
-          {avatars?.map((avatar) => {
-            const body = summarise(avatar.body.stated);
-            return (
-              <li key={avatar.id} className="rounded-xl border border-white/10 bg-white/5 p-5">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <h2 className="font-medium">{avatar.display_name}</h2>
-                    <p className="mt-1 line-clamp-2 text-sm text-neutral-400">{avatar.biography}</p>
-                    {/* What the family said about the body, or plainly that
-                      they did not. Neither reads as a thing left undone. */}
-                    <p className="mt-2 text-xs text-neutral-500">
-                      {body ?? "Body not described — a neutral build is used."}
-                    </p>
-                    <p className="mt-1 text-xs text-neutral-500">
-                      {avatar.crisis_line
-                        ? `Crisis line: ${avatar.crisis_line.name} (${avatar.crisis_line.number})`
-                        : "Not usable yet"}
-                    </p>
-                  </div>
-
-                  <div className="flex shrink-0 gap-2">
-                    <Link
-                      href={`/upload?avatar=${avatar.id}`}
-                      className="rounded-full bg-white/10 px-4 py-2 text-sm hover:bg-white/20"
-                    >
-                      {avatar.photo_set_id ? "Photographs" : "Add photographs"}
-                    </Link>
-                    <Link
-                      href={`/call/${avatar.id}`}
-                      className={`rounded-full px-4 py-2 text-sm ${
-                        avatar.callable
-                          ? "bg-white font-medium text-neutral-950 hover:bg-neutral-200"
-                          : "pointer-events-none bg-white/5 text-neutral-600"
-                      }`}
-                    >
-                      Call
-                    </Link>
-                  </div>
-                </div>
-
-                {!avatar.callable && (
-                  <p className="mt-3 text-xs text-neutral-500">
-                    {avatar.has_assets
-                      ? "Waiting on verified consent before this can be called."
-                      : "Add photographs and build the avatar before calling."}
-                  </p>
-                )}
-              </li>
-            );
-          })}
+      {avatars && avatars.length > 0 && (
+        <ul className="settle">
+          {avatars.map((avatar) => (
+            <Row key={avatar.id} avatar={avatar} />
+          ))}
         </ul>
+      )}
+
+      <div className="mt-10">
+        <Link href="/avatars/new" className={controlClass({ rank: "tinted" })}>
+          Add someone
+        </Link>
       </div>
-    </main>
+    </Screen>
   );
 }

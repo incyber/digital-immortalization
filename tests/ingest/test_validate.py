@@ -275,3 +275,39 @@ def test_opencv_still_provides_the_cascade():
         cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     )
     assert not classifier.empty(), "the bundled frontal cascade must load"
+
+
+def _verdicts(usable: int, rejected: int = 4):
+    from avatar.ingest.validate import PhotoVerdict, Verdict
+
+    return [
+        PhotoVerdict(filename=f"ok-{i}.jpg", verdict=Verdict.OK, reasons=[])
+        for i in range(usable)
+    ] + [
+        PhotoVerdict(filename=f"no-{i}.jpg", verdict=Verdict.REJECTED, reasons=["blurry"])
+        for i in range(rejected)
+    ]
+
+
+def test_the_shortfall_message_is_grammatical_for_one_photograph():
+    """Every sentence in `problems` is shown to a customer verbatim.
+
+    The web app prints the server's own wording rather than rephrasing it, so
+    the grammar here is part of the interface. "only 1 usable images" was
+    reaching people who had just been told that most of their photographs of
+    someone who died could not be used.
+    """
+    from avatar.ingest.validate import inspect_set
+
+    shortfall = next(p for p in inspect_set(_verdicts(1)).problems if "usable" in p)
+
+    assert "1 usable photograph;" in shortfall
+    assert "images" not in shortfall
+
+
+def test_the_shortfall_message_is_plural_for_several():
+    from avatar.ingest.validate import inspect_set
+
+    shortfall = next(p for p in inspect_set(_verdicts(2)).problems if "usable" in p)
+
+    assert "2 usable photographs;" in shortfall

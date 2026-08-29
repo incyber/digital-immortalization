@@ -1,26 +1,543 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+   The design system.
+
+   Written against Apple's Human Interface Guidelines rather than a generic
+   web aesthetic, because every visitor here is grieving and the interface has
+   to stay out of the way.
+
+   Four rules hold the whole thing together:
+
+     Colour is semantic. Nothing in a component names a hue. It names what the
+     colour is for — label, separator, accent — and the value is switched once,
+     here, for light and dark.
+
+     Spacing sits on an 8-point grid. Tailwind's numeric scale is 4px per step,
+     so only even steps are used (p-2 = 8, p-4 = 16, p-6 = 24, p-8 = 32,
+     p-10 = 40, p-12 = 48). Odd steps are an optical half-step, used sparingly.
+
+     Structure comes from hairline separators and grouped surfaces, not from
+     boxes and shadows. Depth is a change of surface, one level at a time.
+
+     Motion is quick and functional. 200ms, Apple's standard curve, and
+     nothing moves that a person did not ask to move.
+--------------------------------------------------------------------------- */
+
+/* --- Semantic colour ------------------------------------------------------
+   Defined once for light, redefined for dark in exactly two places: the
+   system preference, and an explicit choice the person made. Light is the
+   default and the base definition — dark is never the starting point. */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+
+  /* The dark values, held once so the three places that switch to them below
+     assign the same source rather than three copies drifting apart. */
+  --dark-label: #f5f5f7;
+  --dark-secondary-label: rgba(235, 235, 245, 0.6);
+  --dark-tertiary-label: rgba(235, 235, 245, 0.45);
+  --dark-quaternary-label: rgba(235, 235, 245, 0.16);
+  --dark-system-background: #000000;
+  --dark-secondary-system-background: #1c1c1e;
+  --dark-tertiary-system-background: #1c1c1e;
+  --dark-grouped-background: #000000;
+  --dark-separator: rgba(84, 84, 88, 0.65);
+  --dark-opaque-separator: #38383a;
+  --dark-fill: rgba(120, 120, 128, 0.24);
+  --dark-fill-strong: rgba(120, 120, 128, 0.36);
+  --dark-accent: #0a84ff;
+  --dark-accent-pressed: #409cff;
+  --dark-system-red: #ff453a;
+  --dark-system-green: #30d158;
+  --dark-system-orange: #ff9f0a;
+  --dark-system-orange-soft: #ff9f0a;
+  --dark-selected-fill: #636366;
+
+  /* Text */
+  --label: #1d1d1f;
+  --secondary-label: rgba(60, 60, 67, 0.7);
+  --tertiary-label: rgba(60, 60, 67, 0.55);
+  --quaternary-label: rgba(60, 60, 67, 0.26);
+
+  /* Surfaces, from the page backwards */
+  --system-background: #ffffff;
+  --secondary-system-background: #f5f5f7;
+  --tertiary-system-background: #ffffff;
+  --grouped-background: #f5f5f7;
+
+  /* Lines and fills */
+  --separator: rgba(60, 60, 67, 0.18);
+  --opaque-separator: #d2d2d7;
+  --fill: rgba(120, 120, 128, 0.12);
+  --fill-strong: rgba(120, 120, 128, 0.2);
+  /* The chosen segment of a segmented control. Lighter than its track in
+     dark, white against it in light — which is the way round Apple draws it,
+     and the reason this cannot be one of the fills above. */
+  --selected-fill: #ffffff;
+
+  /* Accent, and the three colours allowed to carry meaning */
+  --accent: #007aff;
+  --accent-pressed: #0062cc;
+  --on-accent: #ffffff;
+  --system-red: #d70015;
+  --system-green: #248a3d;
+  --system-orange: #b25000;
+  /* The same meaning, for a line or a bar rather than for words: full system
+     orange is right on a 3px rule and too light under 13pt text. */
+  --system-orange-soft: #ff9500;
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --duration: 200ms;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
+/* The system preference, honoured on a first visit. Guarded so that somebody
+   who has chosen light keeps light on a machine set to dark. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --label: var(--dark-label);
+    --secondary-label: var(--dark-secondary-label);
+    --tertiary-label: var(--dark-tertiary-label);
+    --quaternary-label: var(--dark-quaternary-label);
+
+    --system-background: var(--dark-system-background);
+    --secondary-system-background: var(--dark-secondary-system-background);
+    --tertiary-system-background: var(--dark-tertiary-system-background);
+    --grouped-background: var(--dark-grouped-background);
+
+    --separator: var(--dark-separator);
+    --opaque-separator: var(--dark-opaque-separator);
+    --fill: var(--dark-fill);
+    --fill-strong: var(--dark-fill-strong);
+
+    --accent: var(--dark-accent);
+    --accent-pressed: var(--dark-accent-pressed);
+    --system-red: var(--dark-system-red);
+    --system-green: var(--dark-system-green);
+    --system-orange: var(--dark-system-orange);
+    --system-orange-soft: var(--dark-system-orange-soft);
+    --selected-fill: var(--dark-selected-fill);
   }
 }
 
+/* An explicit choice, which wins in both directions. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --label: var(--dark-label);
+  --secondary-label: var(--dark-secondary-label);
+  --tertiary-label: var(--dark-tertiary-label);
+  --quaternary-label: var(--dark-quaternary-label);
+
+  --system-background: var(--dark-system-background);
+  --secondary-system-background: var(--dark-secondary-system-background);
+  --tertiary-system-background: var(--dark-tertiary-system-background);
+  --grouped-background: var(--dark-grouped-background);
+
+  --separator: var(--dark-separator);
+  --opaque-separator: var(--dark-opaque-separator);
+  --fill: var(--dark-fill);
+  --fill-strong: var(--dark-fill-strong);
+
+  --accent: var(--dark-accent);
+  --accent-pressed: var(--dark-accent-pressed);
+  --system-red: var(--dark-system-red);
+  --system-green: var(--dark-system-green);
+  --system-orange: var(--dark-system-orange);
+  --system-orange-soft: var(--dark-system-orange-soft);
+  --selected-fill: var(--dark-selected-fill);
+}
+
+/* A surface that is dark in both themes.
+   Video belongs on black the way a photograph belongs on a mount, and a call
+   with someone who has died is not the place to discover that the interface
+   has opinions about ambient light. Because the tokens inherit, everything
+   drawn inside this class picks up the dark palette without knowing it. */
+.always-dark {
+  color-scheme: dark;
+
+  --label: var(--dark-label);
+  --secondary-label: var(--dark-secondary-label);
+  --tertiary-label: var(--dark-tertiary-label);
+  --quaternary-label: var(--dark-quaternary-label);
+
+  --system-background: var(--dark-system-background);
+  --secondary-system-background: var(--dark-secondary-system-background);
+  --tertiary-system-background: var(--dark-tertiary-system-background);
+  --grouped-background: var(--dark-grouped-background);
+
+  --separator: var(--dark-separator);
+  --opaque-separator: var(--dark-opaque-separator);
+  --fill: var(--dark-fill);
+  --fill-strong: var(--dark-fill-strong);
+
+  --accent: var(--dark-accent);
+  --accent-pressed: var(--dark-accent-pressed);
+  --system-red: var(--dark-system-red);
+  --system-green: var(--dark-system-green);
+  --system-orange: var(--dark-system-orange);
+  --system-orange-soft: var(--dark-system-orange-soft);
+  --selected-fill: var(--dark-selected-fill);
+}
+
+/* --- Tailwind tokens ------------------------------------------------------
+   `inline` so the utilities compile to var() references rather than to a
+   snapshot of today's value. Without it, switching theme would do nothing. */
+
+@theme inline {
+  --color-label: var(--label);
+  --color-label-secondary: var(--secondary-label);
+  --color-label-tertiary: var(--tertiary-label);
+  --color-label-quaternary: var(--quaternary-label);
+
+  --color-surface: var(--system-background);
+  --color-surface-secondary: var(--secondary-system-background);
+  --color-surface-tertiary: var(--tertiary-system-background);
+  --color-grouped: var(--grouped-background);
+
+  --color-separator: var(--separator);
+  --color-separator-opaque: var(--opaque-separator);
+  --color-fill: var(--fill);
+  --color-fill-strong: var(--fill-strong);
+
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-red: var(--system-red);
+  --color-green: var(--system-green);
+  --color-orange: var(--system-orange);
+  --color-orange-soft: var(--system-orange-soft);
+  --color-selected: var(--selected-fill);
+
+  /* The system font stack. No downloaded face: on the devices this product is
+     used from, the interface font is already installed and already the one
+     every other application is using. */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue",
+    Arial, sans-serif;
+}
+
+/* --- Base ---------------------------------------------------------------- */
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--system-background);
+  color: var(--label);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-synthesis-weight: none;
+}
+
+/* Apple's focus ring: a ring outside the control, never a colour change
+   inside it, and only for people navigating by keyboard. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --- Type scale -----------------------------------------------------------
+   Apple's text styles, in the sizes and weights the guidelines specify, with
+   the tracking SF is designed to be set at. Named after the style rather than
+   the size, so a heading is chosen for what it is. */
+
+@layer components {
+  .text-large-title {
+    font-size: 2.125rem; /* 34 */
+    line-height: 2.5rem; /* 40 */
+    font-weight: 600;
+    letter-spacing: 0.0135em;
+  }
+
+  .text-title-1 {
+    font-size: 1.75rem; /* 28 */
+    line-height: 2.125rem; /* 34 */
+    font-weight: 600;
+    letter-spacing: 0.0125em;
+  }
+
+  .text-title-2 {
+    font-size: 1.375rem; /* 22 */
+    line-height: 1.75rem; /* 28 */
+    font-weight: 600;
+    letter-spacing: 0.016em;
+  }
+
+  .text-title-3 {
+    font-size: 1.25rem; /* 20 */
+    line-height: 1.5625rem; /* 25 */
+    font-weight: 600;
+    letter-spacing: 0.019em;
+  }
+
+  .text-headline {
+    font-size: 1.0625rem; /* 17 */
+    line-height: 1.375rem; /* 22 */
+    font-weight: 600;
+    letter-spacing: -0.025em;
+  }
+
+  .text-body {
+    font-size: 1.0625rem; /* 17 */
+    line-height: 1.5rem; /* 24 */
+    font-weight: 400;
+    letter-spacing: -0.025em;
+  }
+
+  .text-callout {
+    font-size: 1rem; /* 16 */
+    line-height: 1.375rem; /* 22 */
+    font-weight: 400;
+    letter-spacing: -0.02em;
+  }
+
+  .text-subhead {
+    font-size: 0.9375rem; /* 15 */
+    line-height: 1.25rem; /* 20 */
+    font-weight: 400;
+    letter-spacing: -0.0155em;
+  }
+
+  .text-footnote {
+    font-size: 0.8125rem; /* 13 */
+    line-height: 1.125rem; /* 18 */
+    font-weight: 400;
+    letter-spacing: -0.006em;
+  }
+
+  .text-caption {
+    font-size: 0.75rem; /* 12 */
+    line-height: 1rem; /* 16 */
+    font-weight: 400;
+    letter-spacing: 0;
+  }
+
+  /* --- Controls -----------------------------------------------------------
+     Three ranks, exactly as the guidelines describe them: one filled button
+     for the action a screen exists to perform, tinted for a real alternative,
+     plain for everything else. A screen with two filled buttons on it has not
+     decided what it is for. */
+
+  .control {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 44px; /* the smallest comfortable target */
+    padding: 0 1.5rem;
+    border-radius: 980px;
+    font-size: 1.0625rem;
+    line-height: 1.375rem;
+    letter-spacing: -0.025em;
+    font-weight: 500;
+    text-align: center;
+    /* A button that wraps stops being a button and becomes a shape. Two
+       words on a narrow phone is exactly where this happens. */
+    white-space: nowrap;
+    transition:
+      background-color var(--duration) var(--ease-standard),
+      opacity var(--duration) var(--ease-standard),
+      transform 120ms var(--ease-standard);
+    cursor: pointer;
+  }
+
+  .control:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .control:disabled {
+    cursor: default;
+    opacity: 0.4;
+  }
+
+  .control-filled {
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+
+  .control-filled:hover:not(:disabled) {
+    background: var(--accent-pressed);
+  }
+
+  .control-tinted {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+  }
+
+  .control-tinted:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+
+  .control-grey {
+    background: var(--fill);
+    color: var(--label);
+  }
+
+  .control-grey:hover:not(:disabled) {
+    background: var(--fill-strong);
+  }
+
+  .control-plain {
+    background: transparent;
+    color: var(--accent);
+    padding: 0 0.5rem;
+  }
+
+  .control-plain:hover:not(:disabled) {
+    color: var(--accent-pressed);
+  }
+
+  .control-destructive {
+    background: var(--system-red);
+    color: #ffffff;
+  }
+
+  .control-destructive:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+
+  .control-small {
+    min-height: 34px;
+    padding: 0 1rem;
+    font-size: 0.9375rem;
+    line-height: 1.25rem;
+    letter-spacing: -0.0155em;
+  }
+
+  .control-wide {
+    width: 100%;
+  }
+
+  /* --- Text entry ---------------------------------------------------------
+     A field is a line of text on a surface, with the label above it and the
+     help beneath. No heavy border: the surface change is what says a person
+     may type here. */
+
+  .entry {
+    display: block;
+    width: 100%;
+    background: var(--secondary-system-background);
+    border: 1px solid transparent;
+    border-radius: 12px;
+    padding: 0.6875rem 1rem;
+    color: var(--label);
+    font-family: inherit;
+    font-size: 1.0625rem;
+    line-height: 1.5rem;
+    letter-spacing: -0.025em;
+    transition:
+      border-color var(--duration) var(--ease-standard),
+      box-shadow var(--duration) var(--ease-standard);
+  }
+
+  .entry::placeholder {
+    color: var(--tertiary-label);
+  }
+
+  .entry:hover {
+    border-color: var(--separator);
+  }
+
+  /* macOS draws a focused field as an accent border inside a soft ring, not
+     as a second rectangle floating outside it. Both the pointer and the
+     keyboard get it: a text field with the caret in it is focused, and there
+     is no case where hiding that helps anybody. */
+  .entry:focus,
+  .entry:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+
+  /* The browser's own arrow is removed so the control matches every other
+     field, which means drawing the one Apple puts on a popup button back in.
+     Grey rather than accent: it indicates, it does not invite. */
+  select.entry {
+    appearance: none;
+    padding-right: 2.5rem;
+    cursor: pointer;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5L6 6.5l5-5' stroke='%2386868b' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 1rem center;
+    background-size: 12px 8px;
+  }
+
+  textarea.entry {
+    resize: vertical;
+    min-height: 5.5rem;
+  }
+
+  /* Files are chosen through a real button, so the browser's default control
+     is dressed as one rather than left as the odd thing out on the page. */
+  .entry-file::file-selector-button {
+    -webkit-appearance: none;
+    appearance: none;
+    border: 0;
+    margin-right: 1rem;
+    border-radius: 980px;
+    background: var(--fill);
+    color: var(--label);
+    font-family: inherit;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    letter-spacing: -0.0155em;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    transition: background-color var(--duration) var(--ease-standard);
+  }
+
+  .entry-file::file-selector-button:hover {
+    background: var(--fill-strong);
+  }
+
+  /* --- Grouped surfaces ---------------------------------------------------
+     One step of elevation, drawn as a change of surface and a hairline. No
+     shadow: a card that casts one is competing with the content inside it. */
+
+  .group-surface {
+    background: var(--tertiary-system-background);
+    border: 1px solid var(--separator);
+    border-radius: 16px;
+  }
+
+  .hairline {
+    border-top: 1px solid var(--separator);
+  }
+}
+
+/* Appears only when something has finished loading, so the change is noticed
+   without anything sliding about. */
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.settle {
+  animation: settle 320ms var(--ease-standard) both;
 }

@@ -313,9 +313,16 @@ def inspect_set(photos: list[PhotoVerdict]) -> SetVerdict:
     ]
 
     if len(usable) < MIN_USABLE:
+        # Every sentence in `problems` is shown to a customer verbatim - the
+        # web app deliberately prints the server's own wording rather than
+        # rephrasing it - so the grammar is part of the interface. "only 1
+        # usable images" was reaching people who had just been told most of
+        # their photographs of someone who died were unusable.
+        count = len(usable)
         result.problems.append(
-            f"only {len(usable)} usable images; at least {MIN_USABLE} are needed, "
-            f"and {RECOMMENDED_MIN}-{RECOMMENDED_MAX} gives the best likeness"
+            f"only {count} usable {'photograph' if count == 1 else 'photographs'}; "
+            f"at least {MIN_USABLE} are needed, and "
+            f"{RECOMMENDED_MIN}-{RECOMMENDED_MAX} gives the best likeness"
         )
 
     if len(usable) > MAX_ACCEPTED:

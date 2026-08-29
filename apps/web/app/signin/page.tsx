@@ -2,9 +2,17 @@
 
 // Sign in or create an account. One form for both, because at this stage of
 // the product the distinction is not worth a second page.
+//
+// Two fields, and the browser fills them: the autocomplete tokens are set
+// correctly so a saved password arrives on its own and nobody is asked to
+// remember anything on the worst week of their life.
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { Button } from "@/components/ui/Button";
+import { Field } from "@/components/ui/Field";
+import { Notice } from "@/components/ui/Notice";
+import { Screen } from "@/components/ui/Screen";
 import { api } from "@/lib/gateway";
 
 export default function SignIn() {
@@ -21,7 +29,9 @@ export default function SignIn() {
     setError(null);
     try {
       await (mode === "login" ? api.login(email, password) : api.register(email, password));
-      router.push("/upload");
+      // Back to the entry point, which knows whether there is anybody to call
+      // yet. It is the only place that decision is made.
+      router.push("/");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
@@ -30,66 +40,64 @@ export default function SignIn() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-neutral-950 px-6 text-neutral-100">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-5">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {mode === "login" ? "Sign in" : "Create an account"}
-          </h1>
-          <p className="mt-1.5 text-sm text-neutral-400">
-            Your photographs are stored privately and are never shared between accounts.
-          </p>
-        </div>
-
-        <label className="block space-y-1.5">
-          <span className="text-sm text-neutral-400">Email</span>
+    <Screen
+      title={mode === "login" ? "Welcome back." : "Start with an account."}
+      lede="Your photographs are stored privately. They are never shared between accounts, and you can remove them at any time."
+      measure="tight"
+      center
+    >
+      <form onSubmit={submit} className="space-y-6">
+        <Field label="Email">
           <input
             type="email"
             required
+            autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5
-                       outline-none focus:border-white/30"
+            className="entry"
           />
-        </label>
+        </Field>
 
-        <label className="block space-y-1.5">
-          <span className="text-sm text-neutral-400">Password</span>
+        <Field
+          label="Password"
+          help={mode === "register" ? "At least twelve characters." : undefined}
+        >
           <input
             type="password"
             required
             minLength={12}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5
-                       outline-none focus:border-white/30"
+            className="entry"
           />
-          <span className="block text-xs text-neutral-500">At least 12 characters.</span>
-        </label>
+        </Field>
 
         {error && (
-          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <Notice tone="problem" role="alert">
             {error}
-          </p>
+          </Notice>
         )}
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full rounded-full bg-white px-6 py-2.5 font-medium text-neutral-950
-                     transition hover:bg-neutral-200 disabled:opacity-50"
-        >
-          {busy ? "Working…" : mode === "login" ? "Sign in" : "Create account"}
-        </button>
+        <div className="space-y-4 pt-2">
+          <Button type="submit" rank="filled" wide disabled={busy}>
+            {busy ? "One moment…" : mode === "login" ? "Sign in" : "Continue"}
+          </Button>
 
-        <button
-          type="button"
-          onClick={() => setMode(mode === "login" ? "register" : "login")}
-          className="w-full text-sm text-neutral-400 underline-offset-4 hover:underline"
-        >
-          {mode === "login" ? "Create an account instead" : "I already have an account"}
-        </button>
+          <div className="text-center">
+            <Button
+              rank="plain"
+              small
+              onClick={() => {
+                setMode(mode === "login" ? "register" : "login");
+                setError(null);
+              }}
+            >
+              {mode === "login" ? "Create an account instead" : "I already have an account"}
+            </Button>
+          </div>
+        </div>
       </form>
-    </main>
+    </Screen>
   );
 }

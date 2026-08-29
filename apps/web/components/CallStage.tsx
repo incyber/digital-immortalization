@@ -6,6 +6,10 @@
 // The camera is published at low resolution on purpose - nothing renders it,
 // it exists only so the vision channel can sample it, and 320x240 is more
 // than the vision model needs at the size it downscales to anyway.
+//
+// Everything here is drawn on black in both appearances. The page above wraps
+// this in .always-dark, so the semantic colours below resolve to their dark
+// values without this file knowing anything about themes.
 
 import {
   LiveKitRoom,
@@ -17,6 +21,7 @@ import {
 import { Track } from "livekit-client";
 import "@livekit/components-styles";
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/Button";
 import type { SessionDetails } from "@/lib/gateway";
 
 function AvatarVideo() {
@@ -26,10 +31,11 @@ function AvatarVideo() {
 
   if (!agentTrack) {
     return (
-      <div className="flex h-full w-full items-center justify-center text-neutral-500">
-        {participants.length === 0
-          ? "Waiting for the avatar to join…"
-          : "Connecting video…"}
+      <div
+        className="flex h-full w-full items-center justify-center text-subhead text-label-tertiary"
+        aria-live="polite"
+      >
+        {participants.length === 0 ? "Waiting for them to join…" : "Connecting video…"}
       </div>
     );
   }
@@ -41,12 +47,27 @@ function SelfView() {
   const local = tracks.find((t) => t.participant.isLocal);
   if (!local) return null;
   return (
-    <div className="absolute bottom-5 right-5 h-32 w-44 overflow-hidden rounded-lg
-                    border border-white/15 bg-black/60 shadow-xl">
+    <div
+      className="absolute right-6 bottom-6 h-32 w-44 overflow-hidden rounded-2xl
+                 border border-separator bg-black/60"
+    >
       <VideoTrack trackRef={local} className="h-full w-full object-cover" />
-      <span className="absolute bottom-1 left-2 text-[10px] uppercase tracking-wide text-white/70">
-        seen by the avatar
+      <span className="absolute bottom-2 left-3 text-caption text-label-secondary">
+        seen by them
       </span>
+    </div>
+  );
+}
+
+/** Everything that is not a call: a sentence, and a way back. */
+function Stopped({ title, detail, onLeave }: { title: string; detail: string; onLeave: () => void }) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-6 px-6 text-center">
+      <p className="text-body text-label">{title}</p>
+      <p className="max-w-sm text-subhead text-label-secondary">{detail}</p>
+      <Button rank="grey" onClick={onLeave}>
+        Back
+      </Button>
     </div>
   );
 }
@@ -106,7 +127,10 @@ export function CallStage({
 
   if (cameraAvailable === null || micAvailable === null) {
     return (
-      <div className="flex h-full w-full items-center justify-center text-neutral-500">
+      <div
+        className="flex h-full w-full items-center justify-center text-subhead text-label-tertiary"
+        aria-live="polite"
+      >
         Checking your camera and microphone…
       </div>
     );
@@ -116,34 +140,17 @@ export function CallStage({
   // waiting. Say so rather than connecting to a call that cannot work.
   if (!micAvailable) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-6 text-center">
-        <p className="text-neutral-300">A microphone is required for a call.</p>
-        <p className="max-w-sm text-sm text-neutral-500">
-          Allow microphone access for this site, then try again. The camera is
-          optional — the avatar can talk without seeing you.
-        </p>
-        <button
-          onClick={onLeave}
-          className="rounded-full bg-white/10 px-6 py-2.5 text-sm text-white hover:bg-white/20"
-        >
-          Back
-        </button>
-      </div>
+      <Stopped
+        title="A microphone is needed for a call."
+        detail="Allow microphone access for this site, then try again. The camera is optional — they can talk without seeing you."
+        onLeave={onLeave}
+      />
     );
   }
 
   if (failure) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-6 text-center">
-        <p className="text-neutral-300">The call ended unexpectedly.</p>
-        <p className="max-w-sm text-sm text-neutral-500">{failure}</p>
-        <button
-          onClick={onLeave}
-          className="rounded-full bg-white/10 px-6 py-2.5 text-sm text-white hover:bg-white/20"
-        >
-          Back
-        </button>
-      </div>
+      <Stopped title="The call ended unexpectedly." detail={failure} onLeave={onLeave} />
     );
   }
 
@@ -156,37 +163,31 @@ export function CallStage({
       video={cameraAvailable}
       onDisconnected={onLeave}
       onError={(e) => setFailure(e.message)}
-      className="relative h-full w-full bg-neutral-950"
+      className="relative h-full w-full bg-surface"
     >
       <div className="relative h-full w-full">
         <AvatarVideo />
         {cameraAvailable ? (
           <SelfView />
         ) : (
-          <div className="absolute bottom-5 right-5 rounded-lg border border-white/10
-                          bg-black/60 px-3 py-2 text-xs text-neutral-400">
-            No camera — the avatar can hear you but cannot see you
+          <div
+            className="absolute right-6 bottom-6 rounded-xl border border-separator bg-black/60
+                       px-4 py-2 text-footnote text-label-secondary"
+          >
+            No camera — they can hear you but cannot see you
           </div>
         )}
       </div>
 
       <RoomAudioRenderer />
 
-      <div className="absolute bottom-5 left-1/2 flex -translate-x-1/2 gap-3">
-        <button
-          onClick={() => setMuted((m) => !m)}
-          className="rounded-full bg-white/10 px-5 py-2.5 text-sm text-white
-                     backdrop-blur transition hover:bg-white/20"
-        >
+      <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 gap-3">
+        <Button rank="grey" onClick={() => setMuted((m) => !m)}>
           {muted ? "Unmute" : "Mute"}
-        </button>
-        <button
-          onClick={onLeave}
-          className="rounded-full bg-red-600 px-5 py-2.5 text-sm text-white
-                     transition hover:bg-red-500"
-        >
+        </Button>
+        <Button rank="destructive" onClick={onLeave}>
           End call
-        </button>
+        </Button>
       </div>
     </LiveKitRoom>
   );

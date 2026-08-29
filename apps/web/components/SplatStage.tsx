@@ -135,21 +135,21 @@ export function SplatStage({
   const loading = status.phase === "downloading" || status.phase === "decoding";
 
   return (
-    <div className={`relative h-full w-full overflow-hidden bg-neutral-950 ${className}`}>
+    <div className={`always-dark relative h-full w-full overflow-hidden bg-surface ${className}`}>
       {/* The viewer appends its own canvas here and removes it on teardown. */}
       <div ref={containerRef} className="absolute inset-0" />
 
       {status.phase === "unsupported" && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
-          <p className="text-neutral-300">This device cannot render the likeness.</p>
-          <p className="max-w-sm text-sm text-neutral-500">{status.message}</p>
+          <p className="text-body text-label">This device cannot render the likeness.</p>
+          <p className="max-w-sm text-subhead text-label-secondary">{status.message}</p>
         </div>
       )}
 
       {status.phase === "failed" && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
-          <p className="text-neutral-300">The likeness could not be loaded.</p>
-          <p className="max-w-md text-sm text-red-300">{status.message}</p>
+          <p className="text-body text-label">The likeness could not be loaded.</p>
+          <p className="max-w-md text-subhead text-red">{status.message}</p>
         </div>
       )}
 
@@ -158,7 +158,7 @@ export function SplatStage({
           className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6"
           aria-live="polite"
         >
-          <p className="text-sm text-neutral-300">
+          <p className="text-subhead text-label">
             {status.phase === "decoding"
               ? "Unpacking the likeness…"
               : status.percent !== null
@@ -172,10 +172,10 @@ export function SplatStage({
             aria-valuemin={0}
             aria-valuemax={100}
             {...(status.percent !== null ? { "aria-valuenow": status.percent } : {})}
-            className="h-1.5 w-56 max-w-[70vw] overflow-hidden rounded-full bg-white/10"
+            className="h-1 w-56 max-w-[70vw] overflow-hidden rounded-full bg-fill"
           >
             <div
-              className="h-full rounded-full bg-emerald-400 transition-all duration-300"
+              className="h-full rounded-full bg-accent transition-[width] duration-300 ease-out"
               style={{
                 // With no Content-Length there is no honest percentage, so the
                 // bar sits at a fixed sliver rather than inventing a position.
@@ -184,7 +184,7 @@ export function SplatStage({
             />
           </div>
 
-          <p className="tabular-nums text-xs text-neutral-500">
+          <p className="text-footnote tabular-nums text-label-tertiary">
             {status.bytesTotal !== null
               ? `${formatBytes(status.bytesLoaded)} of ${formatBytes(status.bytesTotal)}`
               : `${formatBytes(status.bytesLoaded)} — total size not reported by the server`}

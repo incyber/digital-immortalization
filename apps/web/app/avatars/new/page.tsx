@@ -1,6 +1,13 @@
 "use client";
 
-// Describing the person.
+// Describing the person, and recording who authorised the recreation.
+//
+// Three questions are visible: their name, who they were, and who is giving
+// permission. Everything else the gateway needs is either prefilled from the
+// browser — country, language, the units a height is typed in — or folded away
+// under one line somebody can open if they want to. Nothing in the closed part
+// is required, and nothing in it is invented on the family's behalf: a blank
+// stays blank all the way to the server.
 //
 // Two fields are absent on purpose. The synthetic-media disclosure is
 // generated from the name so it cannot be softened or removed, and the crisis
@@ -8,7 +15,12 @@
 // typed — a wrong number there is worse than no guardrail at all.
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/Button";
+import { Field, FieldGroup } from "@/components/ui/Field";
+import { Notice } from "@/components/ui/Notice";
+import { Screen } from "@/components/ui/Screen";
+import { Segmented } from "@/components/ui/Segmented";
 import {
   BUILDS,
   MAX_HEIGHT_CM,
@@ -28,6 +40,18 @@ import {
   type Posture,
   type ShoulderWidth,
 } from "@/lib/gateway";
+import { preferredCountry, preferredLocale, preferredUnits } from "@/lib/prefill";
+
+// What the gateway does with each answer. "self" is the only one it can verify
+// on its own, and saying so here is the difference between a gate and a
+// formality.
+type Relationship = "self" | "family" | "friend";
+
+const RELATIONSHIPS: { value: Relationship; label: string }[] = [
+  { value: "family", label: "Family" },
+  { value: "friend", label: "Close friend" },
+  { value: "self", label: "This is me" },
+];
 
 export default function NewAvatar() {
   const router = useRouter();
@@ -51,8 +75,13 @@ export default function NewAvatar() {
   const [units, setUnits] = useState<"cm" | "ftin">("cm");
   const [feet, setFeet] = useState("");
   const [inches, setInches] = useState("");
+  const [relationship, setRelationship] = useState<Relationship | null>(null);
+  const [rightsHolder, setRightsHolder] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Held so that a consent call which fails does not create a second person
+  // when somebody presses the button again.
+  const created = useRef<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -63,13 +92,17 @@ export default function NewAvatar() {
         ]);
         setCountries(list);
         setLanguages(langs);
-        if (list.length) {
+
+        // Prefilled from the browser rather than asked. Both remain editable
+        // under the details below.
+        const country = preferredCountry(list);
+        if (country) {
           setForm((f) => ({
             ...f,
-            country: list[0].code,
-            locale: list[0].locale,
+            country: country.code,
+            locale: preferredLocale(langs, country),
           }));
-          setUnits(list[0].code === "US" ? "ftin" : "cm");
+          setUnits(preferredUnits(country));
         }
       } catch (e: unknown) {
         if (e instanceof ApiError && e.status === 401) router.replace("/signin");
@@ -114,294 +147,364 @@ export default function NewAvatar() {
   const heightLooksWrong =
     form.height_cm !== null && (form.height_cm < MIN_HEIGHT_CM || form.height_cm > MAX_HEIGHT_CM);
 
+  const chosenCountry = countries.find((c) => c.code === form.country) ?? null;
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!relationship) return;
     setBusy(true);
     setError(null);
     try {
-      const created = await api.createAvatar(form);
-      router.push(`/upload?avatar=${created.id}`);
+      // A second press after something went wrong updates the person who was
+      // already created rather than making another one, so an edit made
+      // between the two attempts is the version that is kept.
+      let id = created.current;
+      if (id) await api.updateAvatar(id, form);
+      else id = (await api.createAvatar(form)).id;
+      created.current = id;
+
+      // Recorded in the same action, so there is no screen anywhere in this
+      // product where a recreation exists without a named person behind it.
+      await api.recordConsent(id, {
+        rights_holder_name: rightsHolder.trim(),
+        relationship_to_subject: relationship,
+        jurisdiction: chosenCountry?.name ?? form.country,
+      });
+
+      router.push(`/upload?avatar=${id}`);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Could not create the avatar");
+      setError(e instanceof Error ? e.message : "Could not save this");
     } finally {
       setBusy(false);
     }
   }
 
-  // Split so the height boxes can be narrow. Adding a width alongside w-full
-  // does not make them narrow; whichever utility Tailwind emits last wins.
-  const box =
-    "rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 outline-none focus:border-white/30";
-  const field = `w-full ${box}`;
-
   return (
-    <main className="min-h-dvh bg-neutral-950 px-6 py-10 text-neutral-100">
-      <form onSubmit={submit} className="mx-auto max-w-xl space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Who are we recreating?</h1>
-          <p className="mt-1.5 text-sm text-neutral-400">
-            Everything here is yours to write. It is what the avatar knows about itself.
-          </p>
-        </div>
-
-        <label className="block space-y-1.5">
-          <span className="text-sm text-neutral-400">Their name</span>
+    <Screen
+      back={{ href: "/avatars", label: "Back" }}
+      title="Tell us who they were."
+      lede="Three things to start. Everything else can be left alone, or filled in later."
+    >
+      <form onSubmit={submit} className="space-y-8">
+        <Field label="Their name">
           <input
             required
             value={form.display_name}
             onChange={(e) => set("display_name", e.target.value)}
             placeholder="How they were known"
-            className={field}
+            className="entry"
           />
-        </label>
+        </Field>
 
-        <label className="block space-y-1.5">
-          <span className="text-sm text-neutral-400">Who they were</span>
+        <Field
+          label="Who they were"
+          help="Where they were from, what they did, what mattered to them. A few sentences is enough — without them the recreation is invented rather than remembered."
+        >
           <textarea
             required
-            rows={4}
+            rows={5}
             value={form.biography}
             onChange={(e) => set("biography", e.target.value)}
-            placeholder="Where they were from, what they did, what mattered to them."
-            className={field}
+            placeholder="Born in Cádiz. Taught maths for thirty years. Made everybody laugh at the table."
+            className="entry"
           />
-          <span className="block text-xs text-neutral-500">
-            Without this the recreation is invented rather than remembered.
-          </span>
-        </label>
+        </Field>
 
-        <label className="block space-y-1.5">
-          <span className="text-sm text-neutral-400">How they spoke</span>
-          <textarea
-            rows={3}
-            value={form.voice_description}
-            onChange={(e) => set("voice_description", e.target.value)}
-            placeholder="Blunt and funny. Long pauses. Called everyone 'love'."
-            className={field}
-          />
-        </label>
-
-        {/* Photographs of a face carry no body with them, so this is asked
-            rather than worked out. Someone who knew the person is a better
-            source than anything a head-and-shoulders picture could support,
-            and it keeps how they looked in the family's hands. */}
-        <fieldset className="space-y-4 rounded-xl border border-white/10 bg-white/5 p-5">
-          <legend className="px-1 text-sm text-neutral-400">How they were built</legend>
-
-          <p className="text-sm text-neutral-400">
-            Photographs of someone almost always stop at the shoulders, so the rest of them is the
-            part a picture cannot tell us. A few words from you get it close.
+        {/* The consent gate. Calm, and unmissable because of where it sits and
+            what it asks for — never because of how loudly it is coloured. It
+            is not optional, it is not a checkbox, and the name typed here is
+            recorded against the recreation. */}
+        <section className="border-t border-separator pt-8">
+          <h2 className="text-title-3 text-label">Permission</h2>
+          <p className="mt-2 text-subhead text-label-secondary">
+            Recreating a person needs someone who can speak for them. Who is doing that is kept
+            on file with this recreation, and can be withdrawn at any time.
           </p>
 
-          <div className="space-y-1.5">
-            <span className="block text-sm text-neutral-400">Roughly how tall</span>
-            <div className="flex flex-wrap items-center gap-2">
-              {units === "cm" ? (
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  aria-label="Height in centimetres"
-                  value={form.height_cm ?? ""}
-                  onChange={(e) => setCentimetres(e.target.value)}
-                  placeholder="170"
-                  className={`${box} w-28`}
-                />
-              ) : (
-                <>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    aria-label="Height in feet"
-                    value={feet}
-                    onChange={(e) => setImperial(e.target.value, inches)}
-                    placeholder="5"
-                    className={`${box} w-20`}
-                  />
-                  <span className="text-sm text-neutral-500">ft</span>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    aria-label="Height in inches"
-                    value={inches}
-                    onChange={(e) => setImperial(feet, e.target.value)}
-                    placeholder="8"
-                    className={`${box} w-20`}
-                  />
-                  <span className="text-sm text-neutral-500">in</span>
-                </>
-              )}
-              <select
-                aria-label="Height units"
-                value={units}
-                onChange={(e) => switchUnits(e.target.value as "cm" | "ftin")}
-                className={`${box} w-44`}
+          <div className="mt-6 space-y-6">
+            <FieldGroup label="Your relationship to them">
+              <Segmented
+                label="Your relationship to them"
+                value={relationship}
+                options={RELATIONSHIPS}
+                onChange={setRelationship}
+              />
+            </FieldGroup>
+
+            <Field label="Your full name">
+              <input
+                required
+                autoComplete="name"
+                value={rightsHolder}
+                onChange={(e) => setRightsHolder(e.target.value)}
+                placeholder="The name you would sign"
+                className="entry"
+              />
+            </Field>
+
+            {relationship && (
+              <Notice tone="quiet">
+                {relationship === "self"
+                  ? "You are recreating yourself, so nobody else's permission is engaged. This is recorded as soon as you continue."
+                  : "Someone reads this before the first call can open. It usually takes a day. You can add photographs in the meantime."}
+              </Notice>
+            )}
+          </div>
+        </section>
+
+        {/* Everything the gateway can manage without asking. Open only by
+            somebody who wants to; closed, this is one line of grey text. */}
+        <details className="group border-t border-separator pt-8">
+          <summary
+            className="flex cursor-pointer list-none items-center gap-2 text-body text-accent
+                       transition-opacity duration-200 hover:opacity-70
+                       [&::-webkit-details-marker]:hidden"
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              aria-hidden="true"
+              fill="none"
+              className="transition-transform duration-200 group-open:rotate-90"
+            >
+              <path
+                d="M4 2l4 4-4 4"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            More about them
+          </summary>
+
+          <div className="mt-6 space-y-8">
+            <Field
+              label="How they spoke"
+              optional
+              help="Turns of phrase, pace, the things they always said."
+            >
+              <textarea
+                rows={3}
+                value={form.voice_description}
+                onChange={(e) => set("voice_description", e.target.value)}
+                placeholder="Blunt and funny. Long pauses. Called everyone 'love'."
+                className="entry"
+              />
+            </Field>
+
+            {/* Photographs of a face carry no body with them, so this is asked
+                rather than worked out. Someone who knew the person is a better
+                source than anything a head-and-shoulders picture could
+                support, and it keeps how they looked in the family's hands. */}
+            <FieldGroup
+              label="How they were built"
+              optional
+              help="Leave anything you are not sure about. A blank stays blank rather than being filled in for you."
+            >
+              <div className="space-y-6">
+                <div>
+                  <span className="mb-2 block text-footnote text-label-secondary">
+                    Roughly how tall
+                  </span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {units === "cm" ? (
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        aria-label="Height in centimetres"
+                        value={form.height_cm ?? ""}
+                        onChange={(e) => setCentimetres(e.target.value)}
+                        placeholder="170"
+                        className="entry w-24"
+                      />
+                    ) : (
+                      <>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          aria-label="Height in feet"
+                          value={feet}
+                          onChange={(e) => setImperial(e.target.value, inches)}
+                          placeholder="5"
+                          className="entry w-20"
+                        />
+                        <span className="text-subhead text-label-tertiary">ft</span>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          aria-label="Height in inches"
+                          value={inches}
+                          onChange={(e) => setImperial(feet, e.target.value)}
+                          placeholder="8"
+                          className="entry w-20"
+                        />
+                        <span className="text-subhead text-label-tertiary">in</span>
+                      </>
+                    )}
+                    <Segmented
+                      label="Height units"
+                      value={units}
+                      options={[
+                        { value: "ftin", label: "ft / in" },
+                        { value: "cm", label: "cm" },
+                      ]}
+                      onChange={switchUnits}
+                      className="max-w-[11rem]"
+                    />
+                  </div>
+                  {form.height_cm !== null && !heightLooksWrong && (
+                    <span className="mt-2 block text-footnote tabular-nums text-label-secondary">
+                      {bothUnits(form.height_cm)}
+                    </span>
+                  )}
+                  {heightLooksWrong && (
+                    <span className="mt-2 block text-footnote text-orange">
+                      That does not look like a height. Have another look at the number.
+                    </span>
+                  )}
+                </div>
+
+                {/* Words, chosen from a list. There is no right number for any
+                    of this, and a family should never be asked to invent one. */}
+                <div className="grid gap-6 sm:grid-cols-3">
+                  <Field label="Build">
+                    <select
+                      value={form.build ?? ""}
+                      onChange={(e) => set("build", (e.target.value || null) as Build | null)}
+                      className="entry"
+                    >
+                      <option value="">Not sure</option>
+                      {BUILDS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  <Field label="Shoulders">
+                    <select
+                      value={form.shoulders ?? ""}
+                      onChange={(e) =>
+                        set("shoulders", (e.target.value || null) as ShoulderWidth | null)
+                      }
+                      className="entry"
+                    >
+                      <option value="">Not sure</option>
+                      {SHOULDERS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  <Field label="How they stood">
+                    <select
+                      value={form.posture ?? ""}
+                      onChange={(e) => set("posture", (e.target.value || null) as Posture | null)}
+                      className="entry"
+                    >
+                      <option value="">Not sure</option>
+                      {POSTURES.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+              </div>
+            </FieldGroup>
+
+            <div className="grid gap-6 sm:grid-cols-2">
+              <Field
+                label="Country"
+                help={chosenCountry?.crisis_line ?? "No countries are available yet."}
               >
-                <option value="ftin" className="bg-neutral-900">
-                  Feet &amp; inches
-                </option>
-                <option value="cm" className="bg-neutral-900">
-                  Centimetres
-                </option>
-              </select>
+                <select
+                  required
+                  value={form.country}
+                  onChange={(e) => {
+                    const chosen = countries.find((c) => c.code === e.target.value);
+                    set("country", e.target.value);
+                    if (chosen) set("locale", chosen.locale);
+                  }}
+                  className="entry"
+                >
+                  {countries.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              {/* A list, not a text box. Typing "SPANISH" here produced an
+                  avatar that fell back to English prompts while a Spanish
+                  voice read them aloud, which was unintelligible. */}
+              <Field label="Language" help="What they speak, and the voice they speak with.">
+                <select
+                  required
+                  value={form.locale}
+                  onChange={(e) => set("locale", e.target.value)}
+                  className="entry"
+                >
+                  {languages.map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
             </div>
-            {form.height_cm !== null && !heightLooksWrong && (
-              <span className="block text-xs text-neutral-500">{bothUnits(form.height_cm)}</span>
-            )}
-            {heightLooksWrong && (
-              <span className="block text-xs text-amber-200/90">
-                That does not look like a height. Have another look at the number.
-              </span>
-            )}
-          </div>
 
-          {/* Words, chosen from a list. There is no right number for any of
-              this, and a family should never be asked to invent one. */}
-          <div className="grid gap-4 sm:grid-cols-3">
-            <label className="block space-y-1.5">
-              <span className="text-sm text-neutral-400">Build</span>
-              <select
-                value={form.build ?? ""}
-                onChange={(e) => set("build", (e.target.value || null) as Build | null)}
-                className={field}
-              >
-                <option value="" className="bg-neutral-900">
-                  Not sure
-                </option>
-                {BUILDS.map((option) => (
-                  <option key={option.value} value={option.value} className="bg-neutral-900">
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="block space-y-1.5">
-              <span className="text-sm text-neutral-400">Shoulders</span>
-              <select
-                value={form.shoulders ?? ""}
-                onChange={(e) => set("shoulders", (e.target.value || null) as ShoulderWidth | null)}
-                className={field}
-              >
-                <option value="" className="bg-neutral-900">
-                  Not sure
-                </option>
-                {SHOULDERS.map((option) => (
-                  <option key={option.value} value={option.value} className="bg-neutral-900">
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="block space-y-1.5">
-              <span className="text-sm text-neutral-400">How they stood</span>
-              <select
-                value={form.posture ?? ""}
-                onChange={(e) => set("posture", (e.target.value || null) as Posture | null)}
-                className={field}
-              >
-                <option value="" className="bg-neutral-900">
-                  Not sure
-                </option>
-                {POSTURES.map((option) => (
-                  <option key={option.value} value={option.value} className="bg-neutral-900">
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <p className="text-xs text-neutral-500">
-            Leave anything you are not sure about. None of it is needed to carry on, and a blank
-            stays blank rather than being filled in for you.
-          </p>
-        </fieldset>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="block space-y-1.5">
-            <span className="text-sm text-neutral-400">Country</span>
-            <select
-              required
-              value={form.country}
-              onChange={(e) => {
-                const chosen = countries.find((c) => c.code === e.target.value);
-                set("country", e.target.value);
-                if (chosen) set("locale", chosen.locale);
-              }}
-              className={field}
+            <Field
+              label="Limits"
+              optional
+              help="Left empty, they will refuse to claim they are really them, or that they are alive."
             >
-              {countries.map((c) => (
-                <option key={c.code} value={c.code} className="bg-neutral-900">
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <span className="block text-xs text-neutral-500">
-              {countries.find((c) => c.code === form.country)?.crisis_line ??
-                "No countries are available yet."}
-            </span>
-          </label>
-
-          <label className="block space-y-1.5">
-            <span className="text-sm text-neutral-400">Language</span>
-            {/* A list, not a text box. Typing "SPANISH" here produced an
-                avatar that fell back to English prompts while a Spanish voice
-                read them aloud, which was unintelligible. */}
-            <select
-              required
-              value={form.locale}
-              onChange={(e) => set("locale", e.target.value)}
-              className={field}
-            >
-              {languages.map((l) => (
-                <option key={l.code} value={l.code} className="bg-neutral-900">
-                  {l.name}
-                </option>
-              ))}
-            </select>
-            <span className="block text-xs text-neutral-500">
-              What the avatar speaks, and the voice it speaks with.
-            </span>
-          </label>
-        </div>
-
-        <label className="block space-y-1.5">
-          <span className="text-sm text-neutral-400">Limits (optional)</span>
-          <textarea
-            rows={2}
-            value={form.boundaries}
-            onChange={(e) => set("boundaries", e.target.value)}
-            placeholder="Anything it should decline to discuss or claim."
-            className={field}
-          />
-          <span className="block text-xs text-neutral-500">
-            Left empty, it will refuse to claim it is really them or that it is alive.
-          </span>
-        </label>
+              <textarea
+                rows={2}
+                value={form.boundaries}
+                onChange={(e) => set("boundaries", e.target.value)}
+                placeholder="Anything they should decline to discuss or claim."
+                className="entry"
+              />
+            </Field>
+          </div>
+        </details>
 
         {countries.length === 0 && (
-          <p className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-sm text-amber-200/90">
-            No countries are available yet. A verified crisis line is required before an avatar can
-            be created.
-          </p>
+          <Notice tone="attention" title="Not available here yet.">
+            A verified crisis line is required in your country before a recreation can be made.
+          </Notice>
         )}
 
         {error && (
-          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <Notice tone="problem" role="alert">
             {error}
-          </p>
+          </Notice>
         )}
 
-        <button
-          type="submit"
-          disabled={busy || countries.length === 0 || heightLooksWrong}
-          className="w-full rounded-full bg-white px-6 py-3 font-medium text-neutral-950
-                     transition hover:bg-neutral-200 disabled:opacity-40"
-        >
-          {busy ? "Creating…" : "Continue to photographs"}
-        </button>
+        <div className="border-t border-separator pt-8">
+          <Button
+            type="submit"
+            rank="filled"
+            wide
+            disabled={busy || countries.length === 0 || heightLooksWrong || !relationship}
+          >
+            {busy ? "One moment…" : "Continue to photographs"}
+          </Button>
+          {!relationship && (
+            <p className="mt-4 text-center text-footnote text-label-secondary">
+              Choose your relationship to them to continue.
+            </p>
+          )}
+        </div>
       </form>
-    </main>
+    </Screen>
   );
 }
