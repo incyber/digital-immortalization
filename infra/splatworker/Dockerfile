@@ -93,8 +93,13 @@ RUN apt-get update \
 # trellis/modules/sparse/attention, whatever the dense path supports - so
 # xformers is not optional, and resolving it against torch on this index is
 # what stops the pair drifting apart on a rebuild.
+# Pinned, unlike the other image. xformers and spconv both compile against a
+# specific torch, and an unpinned torch means the version that resolves today
+# is not the version that resolves next month - so a build that worked would
+# stop working for a reason nothing in this file changed. That is the drift the
+# dependency audit named as the largest remaining risk here.
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu124 \
-      torch torchvision xformers
+      "torch==2.5.1" "torchvision==0.20.1" "xformers==0.0.28.post3"
 
 # --------------------------------------------------------------------------
 # gsplat, compiled here rather than at first use.
