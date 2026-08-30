@@ -80,6 +80,82 @@ def _fatal(detail: str) -> None:
         pass
 
 
+def _ship_stdout() -> None:
+    """Mirror this process's output to the operator's bucket, continuously.
+
+    The breadcrumbs were enough to see how far the bootstrap got and no
+    further: each one builds its own client and takes about a second, so a
+    worker being stopped mid-sentence loses the sentence. Meanwhile the thing
+    worth reading - what the RunPod SDK itself says when it starts, polls, and
+    stops - was going to a log the API does not expose.
+
+    So stdout and stderr are teed into a buffer and flushed every two seconds
+    by a daemon thread that holds one client open. Best effort throughout: if
+    the bucket is unreachable the worker still runs, and the thread never
+    delays an exit.
+    """
+    bucket = os.environ.get("BUNDLE_BUCKET") or S3_BUCKET
+    if not bucket:
+        return
+
+    import io
+    import sys
+    import threading
+
+    pod = os.environ.get("RUNPOD_POD_ID", "unknown")
+    pending: list[str] = []
+    lock = threading.Lock()
+
+    class _Tee(io.TextIOBase):
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+
+        def write(self, text: str) -> int:
+            with lock:
+                pending.append(text)
+            return self._wrapped.write(text)
+
+        def flush(self) -> None:
+            self._wrapped.flush()
+
+    sys.stdout = _Tee(sys.stdout)
+    sys.stderr = _Tee(sys.stderr)
+
+    def pump() -> None:
+        import time
+
+        import boto3
+        from botocore.config import Config
+
+        client = boto3.client(
+            "s3",
+            endpoint_url=os.environ.get("BUNDLE_ENDPOINT_URL") or S3_ENDPOINT_URL or None,
+            aws_access_key_id=os.environ.get("BUNDLE_ACCESS_KEY") or S3_ACCESS_KEY,
+            aws_secret_access_key=os.environ.get("BUNDLE_SECRET_KEY") or S3_SECRET_KEY,
+            region_name="auto",
+            config=Config(connect_timeout=5, read_timeout=10),
+        )
+        sequence = 0
+        while True:
+            time.sleep(2)
+            with lock:
+                text, pending[:] = "".join(pending), []
+            if not text:
+                continue
+            sequence += 1
+            try:
+                client.put_object(
+                    Bucket=bucket,
+                    Key=f"worker-out/{pod}/{sequence:04d}.txt",
+                    Body=text.encode()[:200_000],
+                    ContentType="text/plain",
+                )
+            except Exception:  # noqa: BLE001, S110 - reporting must not stop work
+                pass
+
+    threading.Thread(target=pump, daemon=True).start()
+
+
 try:
     import generate
     import reconstruct
@@ -453,6 +529,8 @@ if __name__ == "__main__":
     # never reaches Python at all.
     import atexit
     import faulthandler
+
+    _ship_stdout()
 
     _crash = open("/tmp/handler-crash.txt", "w")  # noqa: SIM115 - lives for the process
     faulthandler.enable(file=_crash)
