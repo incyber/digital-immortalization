@@ -505,7 +505,10 @@ def handler(job: dict) -> dict:
     traceback does not tell them which photograph was wrong.
     """
     payload = job.get("input") or {}
-    _fatal(f"job claimed: {str(payload)[:200]}")
+    # The task and nothing else. The payload carries a tenant's storage keys,
+    # and a breadcrumb is a file in a bucket that outlives the job - a family's
+    # photograph should not be findable by reading the worker's logs.
+    _fatal(f"job claimed: task={payload.get('task', 'splat') if isinstance(payload, dict) else '?'}")
     if not isinstance(payload, dict):
         return {"error": "the job input must be an object"}
 
