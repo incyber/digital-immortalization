@@ -164,11 +164,36 @@ def test_too_few_usable_images_is_refused():
     assert "at least" in result.problems[0]
 
 
-def test_too_many_images_is_refused():
-    # Head-on and half-body mixed so this fails only on the count.
-    photos = [ok(f"{i}.jpg", 0.5 if i % 2 else 0.25) for i in range(MAX_ACCEPTED + 5)]
+def test_more_images_than_training_uses_is_not_a_refusal():
+    """The cap belongs to identity training, not to the likeness.
+
+    Too many near-identical photographs overfit a trained identity, which is
+    where this limit came from. The splat renderer reconstructs from views and
+    more of them is strictly better - and a thirty-second video yields sixty
+    frames by design. Treating that as a fault rejected a set that was perfect
+    for the renderer it was headed for: sixty usable frames out of sixty,
+    reported to the customer as "rejected".
+    """
+    photos = [ok(f"{i}.jpg", 0.5 if i % 2 else 0.25) for i in range(MAX_ACCEPTED + 20)]
+
     result = inspect_set(photos)
-    assert any("overfits" in p for p in result.problems)
+
+    assert result.problems == []
+    assert not any(r.blocking and not r.met for r in result.requirements)
+
+
+def test_the_count_is_still_reported_so_nobody_has_to_guess():
+    """Not blocking is not the same as not saying. An operator looking at a set
+    of eighty should be able to see that identity training will use forty."""
+    photos = [ok(f"{i}.jpg", 0.5 if i % 2 else 0.25) for i in range(MAX_ACCEPTED + 20)]
+
+    requirement = next(
+        r for r in inspect_set(photos).requirements if r.key == "not_too_many"
+    )
+
+    assert requirement.met is False
+    assert requirement.blocking is False
+    assert str(MAX_ACCEPTED) in requirement.hint
 
 
 def test_a_set_of_only_head_shots_is_accepted_and_framed_as_a_head():

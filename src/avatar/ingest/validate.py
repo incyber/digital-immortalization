@@ -308,7 +308,12 @@ def inspect_set(photos: list[PhotoVerdict]) -> SetVerdict:
             current=len(usable),
             target=MAX_ACCEPTED,
             met=len(usable) <= MAX_ACCEPTED,
-            hint="Past this the model overfits rather than improving.",
+            blocking=False,
+            hint=(
+                f"Identity training uses at most {MAX_ACCEPTED}. A likeness "
+                "built from video uses every frame, and more views make it "
+                "better, so extra frames are kept rather than refused."
+            ),
         ),
     ]
 
@@ -325,11 +330,13 @@ def inspect_set(photos: list[PhotoVerdict]) -> SetVerdict:
             f"{RECOMMENDED_MIN}-{RECOMMENDED_MAX} gives the best likeness"
         )
 
-    if len(usable) > MAX_ACCEPTED:
-        result.problems.append(
-            f"{len(usable)} images is more than the {MAX_ACCEPTED} this trains on; "
-            "past that the model overfits rather than improving"
-        )
+    # Deliberately adds no problem. This cap belongs to identity training,
+    # where too many near-identical images overfit. The splat renderer - which
+    # is what actually produces the likeness now - reconstructs from views, and
+    # more of them is strictly better. A thirty-second video yields sixty
+    # frames by design, so treating that as a fault rejected a set that was
+    # perfect for the renderer it was headed for: sixty usable frames out of
+    # sixty, reported to the customer as "rejected".
 
     # Torso coverage deliberately adds no problem. It changes the framing,
     # which the customer is told about, rather than blocking the build.

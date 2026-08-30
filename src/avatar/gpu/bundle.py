@@ -15,6 +15,7 @@ treated as a mismatch rather than as permission.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import tarfile
@@ -83,10 +84,15 @@ def build(name: str, root: Path) -> Bundle:
         raise ValueError(f"unknown bundle {name!r}; expected one of {sorted(BUNDLES)}")
 
     buffer = io.BytesIO()
-    # mtime fixed and gzip filename suppressed so the same sources produce the
-    # same bytes. Otherwise every build has a new digest, every endpoint needs
-    # reconfiguring, and the digest stops meaning "this code".
-    with tarfile.open(fileobj=buffer, mode="w:gz", compresslevel=9, format=tarfile.GNU_FORMAT) as tar:
+    # The gzip layer is built explicitly with mtime=0. tarfile's "w:gz" writes
+    # the current time into the gzip header, so two builds of identical sources
+    # a second apart produced different bytes and a different digest - which
+    # the reproducibility test caught only intermittently, because inside one
+    # second it passes. A digest that drifts on its own is worse than no digest
+    # at all: the endpoint is pinned to one, and the worker refuses anything
+    # else.
+    gz = gzip.GzipFile(fileobj=buffer, mode="wb", compresslevel=9, mtime=0)
+    with tarfile.open(fileobj=gz, mode="w", format=tarfile.GNU_FORMAT) as tar:
         for arcname, relative in sorted(files.items()):
             source = root / relative
             if not source.exists():
@@ -100,6 +106,7 @@ def build(name: str, root: Path) -> Bundle:
             info.uname = info.gname = ""
             tar.addfile(info, io.BytesIO(payload))
 
+    gz.close()
     data = buffer.getvalue()
     digest = hashlib.sha256(data).hexdigest()
     logger.info(f"bundle {name}: {len(files)} files, {len(data) // 1024}KB, {digest[:16]}...")

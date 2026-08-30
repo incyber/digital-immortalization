@@ -89,3 +89,26 @@ def test_the_splat_bundle_is_flat():
     puts that directory on sys.path - so the three modules import each other by
     plain name. Nesting any of them would break those imports at cold start."""
     assert not [name for name in BUNDLES["splat"] if "/" in name]
+
+
+def test_the_same_sources_produce_the_same_bytes_across_a_second_boundary():
+    """The digest must depend on the code and on nothing else.
+
+    tarfile's "w:gz" writes the current time into the gzip header, so two
+    builds of identical sources a second apart produced different bytes. Inside
+    one second they matched, which is why the existing reproducibility test
+    passed alone and failed in a full run - a flaky test that was reporting a
+    real defect.
+
+    It matters because the endpoint is pinned to a digest and the worker
+    refuses anything else: a digest that drifts on its own stops a deployment
+    for a reason nobody changed.
+    """
+    import time
+
+    first = build("splat", ROOT)
+    time.sleep(1.1)
+    second = build("splat", ROOT)
+
+    assert first.data == second.data
+    assert first.sha256 == second.sha256
