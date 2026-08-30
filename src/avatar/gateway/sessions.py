@@ -161,6 +161,12 @@ def assert_production_ready(cfg: Settings, account_emails: Iterable[str] | None 
             "COOKIES_SECURE is false; session cookies would be sent over "
             "plaintext HTTP"
         )
+    if cfg.splat_backend == "fake":
+        raise ValueError(
+            "SPLAT_BACKEND is 'fake'; it writes a placeholder in the shape of a "
+            "likeness, and in production that reaches somebody who came here to "
+            "see a person who has died"
+        )
     assert_demo_mode_safe(cfg, account_emails)
 
 

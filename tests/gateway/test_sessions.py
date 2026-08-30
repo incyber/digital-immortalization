@@ -275,3 +275,28 @@ def test_the_browser_may_use_the_methods_the_product_exposes():
     allowed = set(cors.kwargs["allow_methods"])
 
     assert {"GET", "POST", "PATCH", "DELETE"} <= allowed
+
+
+async def test_production_refuses_the_placeholder_splat_backend(cfg):
+    """A placeholder likeness is worse in production than no product at all.
+
+    The fake backend exists so the build pipeline can be tested without a GPU.
+    It writes something splat-shaped that is not anybody, and the call gate
+    cannot tell the difference - `splat_key` is set either way - so the
+    refusal has to happen at startup instead.
+    """
+    from avatar.gateway.sessions import assert_production_ready
+
+    production = cfg.model_copy(
+        update={
+            # Everything else this check looks at, set to something it accepts,
+            # so the failure that surfaces is the one under test.
+            "livekit_api_key": "APIrealkey1234",
+            "livekit_api_secret": "a" * 40,
+            "session_secret": "b" * 40,
+            "cookies_secure": True,
+            "splat_backend": "fake",
+        }
+    )
+    with pytest.raises(ValueError, match="placeholder"):
+        assert_production_ready(production)

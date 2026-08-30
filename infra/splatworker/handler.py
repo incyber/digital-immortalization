@@ -411,6 +411,7 @@ def handler(job: dict) -> dict:
     traceback does not tell them which photograph was wrong.
     """
     payload = job.get("input") or {}
+    _fatal(f"job claimed: {str(payload)[:200]}")
     if not isinstance(payload, dict):
         return {"error": "the job input must be an object"}
 
@@ -445,11 +446,51 @@ if __name__ == "__main__":
     # handler that dies on import is indistinguishable from one that never
     # started. The traceback goes to the same place the bootstrap writes its
     # breadcrumbs, which is somewhere we can actually read.
+    # A worker that dies without raising leaves nothing behind either, and
+    # that is what was happening: the bootstrap said "exec handler.py", six
+    # seconds passed, and the container started over. So the exit itself is
+    # reported, whatever caused it, and a fault handler covers the crash that
+    # never reaches Python at all.
+    import atexit
+    import faulthandler
+
+    _crash = open("/tmp/handler-crash.txt", "w")  # noqa: SIM115 - lives for the process
+    faulthandler.enable(file=_crash)
+
+    def _report_exit() -> None:
+        _crash.flush()
+        try:
+            detail = Path("/tmp/handler-crash.txt").read_text()[-3000:]
+        except OSError:
+            detail = "(no fault output)"
+        _fatal(f"handler process is exiting\n{detail}")
+
+    atexit.register(_report_exit)
+
+    # Signals do not run atexit handlers, and the worker was being stopped
+    # without any of the exit paths above reporting anything. A platform that
+    # scales a worker down sends SIGTERM; a segmentation fault sends SIGSEGV.
+    # Both look identical from the outside - the container simply starts over -
+    # so each one says its own name before it goes.
+    import signal
+
+    def _on_signal(number, _frame):
+        _fatal(f"handler received signal {number} ({signal.Signals(number).name})")
+        raise SystemExit(128 + number)
+
+    for _signal in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(_signal, _on_signal)
+        except (OSError, ValueError):  # not settable in this context
+            pass
+
     try:
+        _fatal("importing runpod")
         import runpod
 
-        print("[handler] starting serverless loop", flush=True)
+        _fatal(f"runpod {getattr(runpod, '__version__', '?')}; starting serverless loop")
         runpod.serverless.start({"handler": handler})
+        _fatal("runpod.serverless.start returned, which it should not")
     except BaseException as exc:  # includes SystemExit, which is the quiet one
         import traceback
 
