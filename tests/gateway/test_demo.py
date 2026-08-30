@@ -287,6 +287,9 @@ def test_assert_production_ready_carries_the_demo_refusal():
         livekit_api_key="a-real-key",
         livekit_api_secret="x" * 40,
         session_secret="a-real-and-sufficiently-long-session-secret",
+        # Production also refuses the placeholder splat backend, and that
+        # refusal would fire first and hide the one under test.
+        splat_backend="runpod",
     )
 
     # Clean: no real accounts.

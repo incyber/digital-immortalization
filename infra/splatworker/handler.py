@@ -488,7 +488,17 @@ if __name__ == "__main__":
         _fatal("importing runpod")
         import runpod
 
-        _fatal(f"runpod {getattr(runpod, '__version__', '?')}; starting serverless loop")
+        # Which mode the SDK is about to choose, said out loud. A worker that
+        # cannot see the platform's job-taking variables starts a local test
+        # server instead of polling, and from the outside that is
+        # indistinguishable from a healthy idle worker - which is what it
+        # looked like: one ready worker, two jobs queued, nothing claimed.
+        seen = sorted(name for name in os.environ if name.startswith("RUNPOD_"))
+        _fatal(
+            f"runpod {getattr(runpod, '__version__', '?')}; "
+            f"RUNPOD_ env present: {seen}; "
+            f"argv={__import__('sys').argv}; starting serverless loop"
+        )
         runpod.serverless.start({"handler": handler})
         _fatal("runpod.serverless.start returned, which it should not")
     except BaseException as exc:  # includes SystemExit, which is the quiet one
