@@ -155,7 +155,11 @@ def _ship_stdout() -> None:
         )
         sequence = 0
         while True:
-            time.sleep(2)
+            # Half a second, not two. The platform stops this worker about
+            # three seconds after the SDK starts, and at a two second interval
+            # the last thing it said - which is the thing worth reading - was
+            # still sitting in the buffer when the process died.
+            time.sleep(0.5)
             with lock:
                 text, pending[:] = "".join(pending), []
             if not text:

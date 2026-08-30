@@ -101,6 +101,18 @@ def worker_env(bundle_name: str) -> dict[str, str]:
     for name in STORAGE_VARS:
         env[name] = os.environ.get(name, "auto" if name == "S3_REGION" else "")
 
+    # The platform's SDK runs system fitness checks before it starts polling for
+    # work, and one of them imports torch to verify CUDA. On this image that
+    # import takes about ten seconds, the worker has not pinged in that time,
+    # and the platform stops it - every time, forever, with jobs sitting in the
+    # queue behind a worker that was killed on its way to becoming useful.
+    #
+    # Skipped rather than sped up, because the check is in the wrong place
+    # rather than merely slow: this worker already has a `health` task that
+    # reports whether torch, CUDA and the weights are present, and it runs when
+    # somebody asks instead of on the path to accepting a job.
+    env["RUNPOD_SKIP_AUTO_SYSTEM_CHECKS"] = "true"
+
     empty = [name for name, value in env.items() if not value]
     if empty:
         raise SystemExit("not set in this environment: " + ", ".join(empty))
