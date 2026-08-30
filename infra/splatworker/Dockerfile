@@ -64,7 +64,7 @@
 #   formats=["gaussian"] does at inference time. That is why FlexiCubes must be
 #   present, and why the two restricted imports behind it are patched out
 #   rather than wished away.
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04 AS base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -120,6 +120,17 @@ RUN pip install --no-cache-dir "setuptools>=70" wheel packaging ninja
 RUN pip install --no-cache-dir "gsplat==1.5.3" \
  && python -c "from gsplat.cuda._backend import _C; print('gsplat kernels built')"
 
+
+# ==========================================================================
+# reconstruct: a video of the person becomes a splat.
+#
+# Its own image, and the split is not a workaround. This route imports no
+# TRELLIS at all - every dependency problem this file has ever had came from
+# the other one, so coupling them meant the harder half blocked the half that
+# was ready. It is also the better route: a clip is real multi-view coverage,
+# and everything in the result was measured rather than invented.
+FROM base AS reconstruct
+
 # --------------------------------------------------------------------------
 # MediaPipe, and the two task bundles the reconstruction route needs.
 #
@@ -133,6 +144,34 @@ RUN mkdir -p /models \
       "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" \
  && curl -sSL -o /models/selfie_multiclass.tflite \
       "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite"
+
+# What every worker needs whatever route it serves: object storage, the job
+# runner, and the bootstrap that fetches our code. Declared here so the
+# reconstruct image is complete on its own and the generate image inherits it.
+RUN pip install --no-cache-dir boto3 runpod
+
+# The only file of ours in either image, and it does nothing but download,
+# verify and exec the rest.
+COPY bootstrap/bootstrap.py /opt/bootstrap.py
+
+ENV APP_DIR=/opt/app \
+    APP_ENTRYPOINT=handler.py \
+    FACE_MODEL_PATH=/models/face_landmarker.task \
+    SEG_MODEL_PATH=/models/selfie_multiclass.tflite
+
+WORKDIR /opt/app
+CMD ["python", "-u", "/opt/bootstrap.py"]
+
+
+# ==========================================================================
+# generate: photographs become a splat, by inventing the views no camera took.
+#
+# Built on top of reconstruct rather than beside it, so there is one copy of
+# the CUDA, torch and gsplat work and this image inherits every fix to it. All
+# of the licence apparatus below - the source patches, the placeholders, the
+# restricted-module assertion - is specific to this stage and does not exist in
+# the image that only reconstructs.
+FROM reconstruct AS generate
 
 # --------------------------------------------------------------------------
 # TRELLIS.
@@ -203,7 +242,7 @@ RUN pip install --no-cache-dir \
       pillow tqdm easydict scipy \
       "opencv-python-headless>=4.10,<5" rembg onnxruntime \
       "transformers>=4.44" safetensors huggingface_hub \
-      "open3d>=0.18" "spconv-cu120" "numpy<2" boto3 runpod \
+      "open3d>=0.18" "spconv-cu120" "numpy<2" \
  \
  # utils3d, with two things that are not optional.
  #
@@ -399,17 +438,9 @@ print("licence placeholders intact")
 PY
 
 # --------------------------------------------------------------------------
-# The only file of ours in the image, and it does nothing but fetch the rest.
-COPY bootstrap/bootstrap.py /opt/bootstrap.py
-
-ENV APP_DIR=/opt/app \
-    APP_ENTRYPOINT=handler.py \
-    TRELLIS_MODEL_DIR=/models/TRELLIS-image-large \
-    FACE_MODEL_PATH=/models/face_landmarker.task \
-    SEG_MODEL_PATH=/models/selfie_multiclass.tflite \
+# Only what this stage adds. The bootstrap, the entrypoint and the MediaPipe
+# paths are inherited from reconstruct.
+ENV TRELLIS_MODEL_DIR=/models/TRELLIS-image-large \
     ATTN_BACKEND=xformers \
     SPCONV_ALGO=native \
     PYTHONPATH=/opt/TRELLIS
-
-WORKDIR /opt/app
-CMD ["python", "-u", "/opt/bootstrap.py"]
