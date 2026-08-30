@@ -6,6 +6,7 @@ photo set cannot be created, read, added to, or trained under another tenant.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from sqlalchemy import func, select
@@ -86,7 +87,17 @@ async def add_photo(
     if count >= MAX_UPLOADS:
         raise ValueError(f"a photo set accepts at most {MAX_UPLOADS} files")
 
-    verdict = inspect_photo(filename, data)
+    # Off the event loop. inspect_photo runs an OpenCV cascade over a
+    # full-resolution image and a Laplacian over the face crop: tens to
+    # hundreds of milliseconds of pure CPU, and this function is called once
+    # per uploaded photograph and sixty times per uploaded clip. Run inline it
+    # is the same bug the video endpoint had, in slow motion - twenty-five
+    # single-photo uploads froze the gateway twenty-five times.
+    #
+    # A thread is enough rather than a process because OpenCV releases the
+    # interpreter lock for the whole of both, so the loop really is free while
+    # this runs rather than merely not the caller.
+    verdict = await asyncio.to_thread(inspect_photo, filename, data)
 
     key = photo_key(owner_id, photo_set_id, _safe_name(filename, count))
     stored = await store.put(owner_id, key, data, content_type)
@@ -146,7 +157,10 @@ async def revalidate_set(
             photo.rejection_reasons = json.dumps(["stored image could not be read"])
             continue
 
-        verdict = inspect_photo(photo.filename, data)
+        # Same reason as add_photo, and more urgent: this loops over every
+        # image in the set, so inline it is one request holding the loop for
+        # the length of forty face detections.
+        verdict = await asyncio.to_thread(inspect_photo, photo.filename, data)
         photo.accepted = verdict.verdict is Verdict.OK
         photo.rejection_reasons = json.dumps([r.value for r in verdict.reasons]) or None
         photo.face_height_fraction = verdict.face_height_fraction

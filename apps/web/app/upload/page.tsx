@@ -37,6 +37,7 @@ import {
   type SplatJob,
   type SplatRefusal,
   type SplatRoute,
+  type VideoJob,
 } from "@/lib/gateway";
 
 const REASON_TEXT: Record<string, string> = {
@@ -69,6 +70,14 @@ export default function Upload() {
   const [builtAvatarId, setBuiltAvatarId] = useState<string | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
   const [videoStatus, setVideoStatus] = useState<string | null>(null);
+
+  // Reading a clip is a job on the server, watched exactly the way the two
+  // builds below are watched. It became one because doing it inside the
+  // upload request stalled the whole gateway; what the customer saw was a
+  // file picker that appeared to do nothing and then a 502.
+  const [videoJobId, setVideoJobId] = useState<string | null>(null);
+  const [videoJob, setVideoJob] = useState<VideoJob | null>(null);
+  const [videoProgress, setVideoProgress] = useState(0);
 
   // The 3D likeness. Kept apart from the training job above because it is a
   // different build with a different floor: a short clip that cannot train a
@@ -158,25 +167,76 @@ export default function Upload() {
 
   // A clip is usually a better source than an album: twenty seconds of someone
   // talking holds more angles and mouth positions than most families have in
-  // stills. The server takes the frames, so this uploads once and waits.
+  // stills. The upload returns as soon as the bytes have landed; the frames
+  // are taken in the background and watched by the effect below.
   async function onVideo(files: FileList | null) {
     if (!files || !files.length || !setId) return;
     setError(null);
-    setVideoStatus("Reading the clip. This takes a moment.");
+    setVideoJob(null);
+    setVideoProgress(0.02); // visible immediately, so a chosen file clearly landed
+    setVideoStatus("Reading the clip.");
 
     try {
-      const result = await api.uploadVideo(setId, files[0]);
-      setVideoStatus(
-        `${result.accepted} usable of ${result.frames_examined} frames taken from the clip.`,
-      );
-      await refresh(setId);
-      setSet(await api.evaluate(setId));
+      const started = await api.uploadVideo(setId, files[0]);
+      setVideoJobId(started.job_id);
     } catch (e) {
       setVideoStatus(null);
+      setVideoProgress(0);
       setError(e instanceof Error ? e.message : "Could not read that video");
     }
     if (videoInput.current) videoInput.current.value = "";
   }
+
+  // Poll while the clip is being read. Same shape as the two build polls
+  // below, on purpose: one mechanism for every long job on this page.
+  //
+  // The counts here are counted rather than estimated — the server reads the
+  // frame total from the clip's own metadata before it decodes anything — so
+  // "40 of 60 frames, 31 usable" is true at the moment it is shown.
+  useEffect(() => {
+    if (!videoJobId || !setId) return;
+    const timer = setInterval(async () => {
+      let job: VideoJob;
+      try {
+        job = await api.videoJob(videoJobId);
+      } catch {
+        // A failed poll is not a failed job; keep polling.
+        return;
+      }
+      setVideoJob(job);
+      // Never let the bar go backwards on an out-of-order poll, and never let
+      // a response without a number in it turn the bar into NaN.
+      setVideoProgress((p) => (Number.isFinite(job.progress) ? Math.max(p, job.progress) : p));
+
+      if (job.status === "running" || job.status === "queued") {
+        setVideoStatus(
+          job.frames_planned > 0
+            ? `${job.frames_examined} of ${job.frames_planned} frames checked, ${job.frames_usable} usable.`
+            : "Reading the clip.",
+        );
+        return;
+      }
+
+      clearInterval(timer);
+      if (job.status === "succeeded") {
+        setVideoStatus(
+          `${job.frames_usable} usable of ${job.frames_examined} frames taken from the clip.`,
+        );
+        // The frames are photographs in the set now, so the set is re-read and
+        // re-judged exactly as it is after a batch of photographs.
+        await refresh(setId);
+        try {
+          setSet(await api.evaluate(setId));
+        } catch {
+          // Leave the per-image verdicts standing; the explicit button remains.
+        }
+      } else {
+        setVideoStatus(null);
+        setError(job.error ?? "Could not read that video");
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [videoJobId, setId, refresh]);
 
   // Re-runs the current checks over what is already uploaded. Offered only
   // when something was rejected, because that is the only time it can change
@@ -342,7 +402,29 @@ export default function Upload() {
               onFiles={onVideo}
             />
           </div>
-          {videoStatus && <p className="mt-4 text-subhead text-label">{videoStatus}</p>}
+          {/* A bar and a count, because a file picker that appears to do
+              nothing is what people actually complain about. The bar is only
+              there while there is something left to wait for; a finished clip
+              is a sentence. */}
+          {videoJob && (videoJob.status === "running" || videoJob.status === "queued") ? (
+            <div className="mt-6">
+              <Progress
+                value={videoProgress}
+                label="Reading the clip"
+                detail={
+                  videoJob.frames_planned > 0
+                    ? `${videoJob.frames_examined} of ${videoJob.frames_planned} frames checked, ${videoJob.frames_usable} usable so far. You can close this page — it keeps going.`
+                    : "You can close this page — it keeps going."
+                }
+              />
+            </div>
+          ) : (
+            videoStatus && (
+              <p className="mt-4 text-subhead text-label" aria-live="polite">
+                {videoStatus}
+              </p>
+            )
+          )}
         </section>
 
         <section className="border-t border-separator pt-12">
@@ -599,7 +681,7 @@ export default function Upload() {
 
             {jobStatus === "succeeded" && builtAvatarId && (
               <div className="mt-6">
-                <Link href={`/call/${builtAvatarId}`} className={controlClass({ rank: "filled" })}>
+                <Link href={`/call/?avatar=${builtAvatarId}`} className={controlClass({ rank: "filled" })}>
                   Talk to them
                 </Link>
               </div>

@@ -7,6 +7,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { AccountScope } from "@/components/ui/AccountScope";
 import { Appearance } from "@/components/ui/Appearance";
 
 /** How wide the column runs. Reading stays narrow; grids may go wide. */
@@ -84,9 +85,10 @@ export function Screen({
           className={`${column} flex flex-wrap items-center justify-between gap-6
                       border-t border-separator pt-8`}
         >
-          <p className="text-footnote text-label-secondary">
-            Everything you upload stays in your account.
-          </p>
+          {/* Its own component because the sentence changes in demo mode,
+              where there is one shared account and the promise of privacy
+              would be false. See components/ui/AccountScope.tsx. */}
+          <AccountScope />
           <Appearance />
         </div>
       </footer>

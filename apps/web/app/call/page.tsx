@@ -17,7 +17,7 @@
 // black, and this is not the moment to be adjusting to a white interface.
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CallStage } from "@/components/CallStage";
 import { Disclosure } from "@/components/Disclosure";
@@ -33,10 +33,30 @@ import {
 } from "@/lib/gateway";
 import { resolveLikeness, type LikenessPlan } from "@/lib/likeness";
 
+/** The avatar id in the query string, or null — including during prerender. */
+function avatarFromLocation(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("avatar");
+}
+
 export default function Call() {
   const router = useRouter();
-  const params = useParams<{ avatarId: string }>();
-  const avatarId = params.avatarId;
+
+  // Who is being called arrives in the query string rather than in the path.
+  //
+  // The site is a static export, and an export writes one file per route at
+  // build time. A path segment whose values are avatar ids cannot be
+  // enumerated then — there is no list, and there will not be one until a
+  // family creates one — so /call/<id> has no file behind it and a deep link
+  // is a 404. A query string is invisible to routing: one file answers every
+  // avatar.
+  //
+  // Read off window.location rather than through useSearchParams, so this page
+  // needs no suspense boundary — the same choice app/upload/page.tsx makes.
+  // Held in no state at all: nothing this component draws depends on it, only
+  // the requests it makes, so reading it during render costs nothing and
+  // cannot disagree with the prerendered markup.
+  const avatarId = avatarFromLocation();
 
   const [avatar, setAvatar] = useState<Avatar | null>(null);
   const [likeness, setLikeness] = useState<LikenessPlan | null>(null);
@@ -46,6 +66,13 @@ export default function Call() {
   const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
+    // A call naming nobody. Not an error worth a screen of its own — the list
+    // is where they were going.
+    if (!avatarId) {
+      router.replace("/avatars");
+      return;
+    }
+
     let cancelled = false;
 
     (async () => {
@@ -75,6 +102,7 @@ export default function Call() {
   }, [avatarId, router]);
 
   async function start() {
+    if (!avatarId) return;
     setConnecting(true);
     setError(null);
     setRefused(null);

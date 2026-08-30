@@ -59,7 +59,7 @@ function Row({ avatar }: { avatar: Avatar }) {
             {avatar.photo_set_id ? "Photographs" : "Add photographs"}
           </Link>
           {avatar.callable && (
-            <Link href={`/call/${avatar.id}`} className={controlClass({ rank: "filled", small: true })}>
+            <Link href={`/call/?avatar=${avatar.id}`} className={controlClass({ rank: "filled", small: true })}>
               Call
             </Link>
           )}

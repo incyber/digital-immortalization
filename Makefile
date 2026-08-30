@@ -2,7 +2,7 @@
 # binary checked into .tools/ rather than installed on the host.
 UV := .tools/uv
 
-.PHONY: install infra-up infra-down test test-e2e latency consent gpu-status gpu-stop endpoint-create endpoint-verify lint agent gateway web clean
+.PHONY: install infra-up infra-down test test-e2e latency consent gpu-status gpu-stop endpoint-create endpoint-verify lint agent gateway web web-build clean
 
 install:                ## Resolve dependencies and install the package editable
 	$(UV) sync --extra dev
@@ -51,6 +51,9 @@ agent:                  ## Realtime pipeline; joins a room as a participant
 
 web:
 	cd apps/web && npm run dev
+
+web-build:              ## Build the site into the gateway, which then serves it
+	cd apps/web && npm ci && npm run export
 
 clean:
 	rm -rf .pytest_cache .ruff_cache **/__pycache__

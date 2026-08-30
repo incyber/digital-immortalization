@@ -11,6 +11,7 @@ finished build is picked up on the next call with no further wiring.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from loguru import logger
@@ -116,10 +117,18 @@ async def finalise_avatar(
         raise FinaliseError("none of the stored photographs could be read")
 
     framing = Framing(photo_set.framing) if photo_set.framing else Framing.HEAD
-    assets = build_avatar_assets(images, framing=framing)
+
+    # Off the event loop, both of them. Building the assets runs face
+    # detection, sharpness scoring and mouth-plate generation over every
+    # accepted photograph, and saving them writes a few hundred frames to
+    # disk. This function is reached from the training-job status endpoint -
+    # the request whose entire purpose is to answer "how is it going" - so
+    # inline it froze the gateway at exactly the moment somebody was watching
+    # it. Same failure as the video endpoint, one floor up.
+    assets = await asyncio.to_thread(build_avatar_assets, images, framing=framing)
 
     destination = assets_dir_for(cfg, avatar.id)
-    assets.save(destination)
+    await asyncio.to_thread(assets.save, destination)
 
     # The customer's own footage is the base whenever it exists. This is the
     # difference between a face that moves and a face that does not: the lip

@@ -7,7 +7,9 @@ than the other way round.
 
 from __future__ import annotations
 
+import sys
 import uuid
+from collections.abc import Iterable
 from datetime import timedelta
 
 from livekit import api
@@ -15,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from avatar.config import Settings
 from avatar.gateway.consent import assert_consented
+from avatar.gateway.demo import DEMO_EMAIL
 from avatar.gateway.dispatch import AgentDispatcher
 from avatar.gateway.models import Session
 from avatar.gateway.tenancy import assert_owned
@@ -112,7 +115,7 @@ DEV_CREDENTIALS = {("devkey", "secret")}
 MIN_SECRET_BYTES = 32
 
 
-def assert_production_ready(cfg: Settings) -> None:
+def assert_production_ready(cfg: Settings, account_emails: Iterable[str] | None = None) -> None:
     """Refuse to start with development credentials.
 
     Called from create_app when PRODUCTION is set, and only then - so tests and
@@ -124,6 +127,11 @@ def assert_production_ready(cfg: Settings) -> None:
     audit found it dead. That is the second time in this project a safety
     check has been described as protection while never executing, so the test
     that matters now is the one asserting create_app calls it.
+
+    account_emails is the database's answer to "is anybody real here", passed
+    through to assert_demo_mode_safe. It is optional because this function runs
+    at construction, before there is a database to ask; the lifespan asks again
+    with it filled in.
     """
     if (cfg.livekit_api_key, cfg.livekit_api_secret) in DEV_CREDENTIALS:
         raise ValueError(
@@ -144,4 +152,65 @@ def assert_production_ready(cfg: Settings) -> None:
         raise ValueError(
             "COOKIES_SECURE is false; session cookies would be sent over "
             "plaintext HTTP"
+        )
+    assert_demo_mode_safe(cfg, account_emails)
+
+
+# Printed rather than logged. Logging configuration is a deployment's business
+# and can be turned down; this must be visible in whatever a container's
+# console is, on every boot, for as long as the flag is on.
+_DEMO_BANNER = """
+================================================================================
+DEMO_MODE IS ON.
+
+Every visitor is signed into ONE SHARED ACCOUNT with no password. Everything
+uploaded here - photographs, recordings, biographies - is readable by anyone
+who has the link. This is not a private deployment and it must never be put in
+front of a real family.
+
+Turn it off by unsetting DEMO_MODE.
+================================================================================
+"""
+
+
+def assert_demo_mode_safe(cfg: Settings, account_emails: Iterable[str] | None = None) -> None:
+    """Refuse to run demo mode over anybody's real data.
+
+    Two halves, because the dangerous condition is not visible in one place.
+
+    What configuration alone can say is only that the flag is on, so that half
+    is a banner on stderr - loud, on every boot, unmissable in a container's
+    console. A flag that silently changes who can read a stranger's
+    photographs must not be quiet.
+
+    What actually decides safety is the database, so the caller that has read
+    it passes the account list and this raises. "Any real customer data could
+    exist" is, precisely, "an account exists that is not the demo account":
+    every photograph, recording and consent record in this system hangs off an
+    account, so no account means nothing of anyone's to expose. That check runs
+    at startup (see create_app's lifespan) before the first request is served,
+    and it runs whether or not PRODUCTION is set - a laptop holding a real
+    family's uploads is not less serious for being a laptop.
+
+    Passing no account list checks the configuration half only. That is what
+    assert_production_ready does, because it is called before the database
+    exists.
+    """
+    if not cfg.demo_mode:
+        return
+
+    print(_DEMO_BANNER, file=sys.stderr, flush=True)
+
+    if account_emails is None:
+        return
+
+    real = sorted({address for address in account_emails if address != DEMO_EMAIL})
+    if real:
+        raise ValueError(
+            f"DEMO_MODE is on and this database holds {len(real)} account(s) that "
+            f"are not the demo account ({', '.join(real[:3])}"
+            f"{', ...' if len(real) > 3 else ''}). Demo mode signs every visitor "
+            "into one shared tenant, so starting here would hand a stranger's "
+            "photographs and recordings to anyone with the link. Unset DEMO_MODE, "
+            "or point this deployment at an empty database."
         )

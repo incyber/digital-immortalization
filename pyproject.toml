@@ -35,6 +35,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/avatar"]
+# The built web app, which the gateway serves so that the site and the API
+# share one origin (see gateway/web.py). It is generated output and therefore
+# in .gitignore, and hatchling honours .gitignore when deciding what to
+# package — so without this line the wheel installs a gateway with no site in
+# it and every page is a 404. `artifacts` is the escape hatch for exactly this:
+# build output that must ship even though version control ignores it.
+artifacts = ["src/avatar/gateway/webroot/**"]
 
 [tool.pytest.ini_options]
 # Long-running property checks. Kept in the default run because the property

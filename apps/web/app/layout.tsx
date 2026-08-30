@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { DemoBanner } from "@/components/DemoBanner";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -31,7 +32,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <head>
         <script dangerouslySetInnerHTML={{ __html: APPEARANCE }} />
       </head>
-      <body className="min-h-full bg-surface text-label">{children}</body>
+      <body className="min-h-full bg-surface text-label">
+        {/* On every screen, not only the first one. In demo mode this
+            deployment has a single shared account, and somebody who arrives
+            straight at the upload page must be told before they choose a
+            photograph rather than after. Renders nothing at all when the flag
+            is off, which is the default. */}
+        <DemoBanner />
+        {children}
+      </body>
     </html>
   );
 }

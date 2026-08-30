@@ -474,6 +474,55 @@ class TrainingJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class VideoIngestJob(Base):
+    """One uploaded clip being turned into frames.
+
+    A row rather than only a task in memory, for the same two reasons the
+    training and splat jobs are rows: a family who closes the tab can still be
+    told what happened, and a gateway that dies mid-job leaves evidence rather
+    than a bar stuck at forty percent forever.
+
+    A separate table rather than three more columns on training_jobs. Schema
+    is created with metadata.create_all, which adds missing tables and does
+    not add missing columns, so widening a table that already exists in the
+    deployed database would reach every fresh checkout and no live one - and
+    the first read of the new column would be a 500 on the running product.
+    A new table is applied by exactly the same call.
+
+    The counts are the point of it. "Forty of sixty frames, thirty-one usable"
+    is something a person can watch; a spinner is not, and a spinner is what
+    the customer complained about.
+    """
+
+    __tablename__ = "video_ingest_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    photo_set_id: Mapped[str] = mapped_column(ForeignKey("photo_sets.id"), index=True)
+    status: Mapped[TrainingStatus] = mapped_column(
+        Enum(TrainingStatus, native_enum=False, values_callable=lambda e: [m.value for m in e]),
+        default=TrainingStatus.QUEUED,
+        index=True,
+    )
+    # The customer's own filename, for display. The storage key is generated.
+    filename: Mapped[str] = mapped_column(String(255), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+
+    # How many frames the clip will yield, known from container metadata
+    # before any decoding, so the bar has a denominator from the start. Zero
+    # means the clip has not been read yet.
+    frames_planned: Mapped[int] = mapped_column(Integer, default=0)
+    # How many have been checked so far, and how many of those a face was
+    # found in. Both are written as the work proceeds, not at the end.
+    frames_examined: Mapped[int] = mapped_column(Integer, default=0)
+    frames_usable: Mapped[int] = mapped_column(Integer, default=0)
+
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Session(Base):
     __tablename__ = "sessions"
 

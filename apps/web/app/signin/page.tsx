@@ -8,15 +8,27 @@
 // remember anything on the worst week of their life.
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
 import { Notice } from "@/components/ui/Notice";
 import { Screen } from "@/components/ui/Screen";
+import { useSharedDemo } from "@/lib/demo";
 import { api } from "@/lib/gateway";
 
 export default function SignIn() {
   const router = useRouter();
+
+  // A shared demo has one account and it takes no credentials, so this form
+  // has nothing to submit to — the gateway refuses both endpoints. Nothing
+  // links here in that mode, because nothing returns a 401 to redirect on;
+  // this is for somebody who typed the address or followed an old link, and
+  // sending them to the entry point is better than a form that only fails.
+  const shared = useSharedDemo();
+  useEffect(() => {
+    if (shared) router.replace("/");
+  }, [shared, router]);
+
   const [mode, setMode] = useState<"login" | "register">("register");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

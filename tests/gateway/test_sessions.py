@@ -153,29 +153,76 @@ async def test_insecure_cookies_are_rejected_in_production(cfg):
         assert_production_ready(cfg)
 
 
-def test_the_session_cookie_works_cross_site_when_deployed():
-    """The web app and this API are on different domains in any real deploy.
-
-    A lax cookie is never sent cross-site, so sign-in appears to succeed and
-    every request after it is anonymous. samesite=none is what makes a hosted
-    site able to stay signed in, and browsers only accept it over https.
-    """
+def _register_and_read_the_cookie(cfg) -> str:
     from fastapi.testclient import TestClient
 
-    from avatar.config import Settings
     from avatar.gateway.app import create_app
 
-    cfg = Settings(_env_file=None, cookies_secure=True, database_url="sqlite+aiosqlite:///:memory:")
     with TestClient(create_app(cfg)) as client:
         response = client.post(
             "/api/auth/register",
             json={"email": "cross@example.com", "password": "correct-horse-battery"},
         )
         assert response.status_code in (200, 201), response.text
-        header = response.headers["set-cookie"].lower()
+        return response.headers["set-cookie"].lower()
+
+
+def test_the_deployed_session_cookie_is_first_party():
+    """One origin serves the site and this API, so the cookie is first-party.
+
+    This used to be samesite=none, because the site was on one domain and the
+    API on another. Safari blocks third-party cookies outright and Chrome
+    blocks them in common configurations, so sign-in returned 200, the cookie
+    was discarded, and the app bounced back to the sign-in page forever. The
+    fix was to serve both from this process; lax is the cookie that follows
+    from it, and it is the one a browser will actually keep.
+    """
+    from avatar.config import Settings
+
+    cfg = Settings(_env_file=None, cookies_secure=True, database_url="sqlite+aiosqlite:///:memory:")
+    header = _register_and_read_the_cookie(cfg)
+
+    assert "samesite=lax" in header
+    assert "secure" in header
+
+
+def test_a_split_origin_deployment_can_still_ask_for_a_cross_site_cookie():
+    """The escape hatch is real, because somebody will need it again.
+
+    A site hosted somewhere other than this process is cross-site by
+    definition, and a lax cookie is simply never sent there.
+    """
+    from avatar.config import Settings
+
+    cfg = Settings(
+        _env_file=None,
+        cookies_secure=True,
+        cookie_samesite="none",
+        database_url="sqlite+aiosqlite:///:memory:",
+    )
+    header = _register_and_read_the_cookie(cfg)
 
     assert "samesite=none" in header
     assert "secure" in header
+
+
+def test_samesite_none_is_downgraded_when_the_cookie_is_not_secure():
+    """Browsers discard SameSite=None without Secure, silently.
+
+    Honouring the setting over plain http would produce no cookie at all and a
+    failure that looks like the server. Lax at least works.
+    """
+    from avatar.config import Settings
+
+    cfg = Settings(
+        _env_file=None,
+        cookies_secure=False,
+        cookie_samesite="none",
+        database_url="sqlite+aiosqlite:///:memory:",
+    )
+    header = _register_and_read_the_cookie(cfg)
+
+    assert "samesite=lax" in header
 
 
 def test_create_app_refuses_to_start_in_production_with_dev_credentials():

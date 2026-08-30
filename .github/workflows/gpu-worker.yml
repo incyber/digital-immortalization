@@ -94,12 +94,12 @@ jobs:
           target: ${{ steps.plan.outputs.target }}
           platforms: linux/amd64
           push: true
-          # A plain single-platform manifest, not an OCI index. buildx defaults
-          # to attaching a provenance attestation, which turns the tag into an
-          # index holding the real image plus an "unknown/unknown" entry. Some
-          # runtimes pull that happily and some sit in `initializing` forever;
-          # nothing here needs the attestation.
-          provenance: false
+          # An OCI index, deliberately. This was set to false earlier on a guess
+          # that the index was why workers would not start; RunPod's own worker
+          # log later showed the pull never begins at all, and the only image
+          # that has ever run on this account is an index. Restoring it because
+          # index-and-public is the one combination never tried.
+          provenance: mode=min
           sbom: false
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ inputs.tag }}
           # Layer cache in the registry. A one-line handler change then rebuilds

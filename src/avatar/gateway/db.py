@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -33,5 +34,19 @@ async def create_all(cfg: Settings) -> None:
 
 async def get_db() -> AsyncIterator[AsyncSession]:
     assert _factory is not None, "init_engine must run before requests are served"
+    async with _factory() as session:
+        yield session
+
+
+@asynccontextmanager
+async def session_scope() -> AsyncIterator[AsyncSession]:
+    """A session for work that is not a request.
+
+    get_db is a FastAPI dependency and only usable as one. Startup checks and
+    background work need the same session with an ordinary `async with`, and
+    writing `async for ... break` at those call sites hides a resource leak one
+    edit away.
+    """
+    assert _factory is not None, "init_engine must run before a session is opened"
     async with _factory() as session:
         yield session

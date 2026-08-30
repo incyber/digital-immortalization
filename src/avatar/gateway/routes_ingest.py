@@ -7,9 +7,15 @@ that takes a tenant id from the request body.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
+import tempfile
+import time
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,9 +38,107 @@ from avatar.ingest.validate import (
     RECOMMENDED_MAX,
     RECOMMENDED_MIN,
 )
-from avatar.ingest.video import VideoError, extract_frames, is_video
-from avatar.storage.keys import source_clip_key
+from avatar.ingest.video import is_video
+from avatar.ingest.video_service import VideoBusy, VideoIngestService
 from avatar.training.base import JobState, TrainingRequest
+
+# The largest clip that will be accepted at all.
+#
+# Two minutes is already the ceiling on useful length (ingest/video.py), and
+# two minutes of 1080p from a phone is roughly 300MB. This sits just under
+# that, so an ordinary recording passes and a 4K clip is refused in a sentence
+# rather than filling the volume or being killed halfway through.
+#
+# It is enforced while the upload streams, not after: the point of the limit
+# is to stop before the bytes are on disk, and a check on a completed file has
+# already paid the cost it was meant to avoid.
+MAX_VIDEO_BYTES = 256 * 1024 * 1024
+
+# How much of an upload is in memory at once on its way to disk. Everything
+# above this is the operating system's problem rather than the process's.
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+# Spooled uploads older than this are somebody's crashed job, not work in
+# progress. A two-minute clip is processed in minutes; an hour is not a job.
+SPOOL_STALE_S = 3600.0
+
+
+class UploadTooLarge(ValueError):
+    pass
+
+
+def spool_dir(settings) -> Path:
+    """Where a clip waits between arriving and being read.
+
+    On the deployment this is the mounted volume rather than container-local
+    disk, which matters twice: the root filesystem is small, and a job that
+    outlives a deploy would otherwise lose the file it was working on.
+    """
+    return Path(settings.assets_dir) / "uploads"
+
+
+def sweep_spool(settings, *, older_than_s: float = SPOOL_STALE_S) -> int:
+    """Delete abandoned uploads. Returns how many went.
+
+    A process killed mid-job leaves its spooled clip behind, and 256MB of
+    those accumulate into a full volume with no error pointing at the cause.
+    Called at startup, which is exactly when a crash has just happened.
+    """
+    directory = spool_dir(settings)
+    if not directory.is_dir():
+        return 0
+    removed = 0
+    cutoff = time.time() - older_than_s
+    for path in directory.iterdir():
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        # One unreadable file must not stop the sweep.
+        except OSError:
+            continue
+    if removed:
+        logger.info(f"swept {removed} abandoned upload(s) from {directory}")
+    return removed
+
+
+async def _spool_upload(file: UploadFile, directory: Path) -> tuple[Path, int]:
+    """Stream the upload to disk without ever holding it in memory.
+
+    The whole reason this is not `await file.read()`. A 72MB clip read into a
+    bytes object, on a 4GB machine that also holds a speech model, is a real
+    out-of-memory risk - and an out-of-memory kill presents as the machine
+    vanishing, with nothing in the log to say why.
+
+    Starlette has already spooled the multipart body to its own temporary
+    file, so this is a disk-to-disk copy in 1MB pieces. The writes go through
+    a thread because the event loop must not do file I/O either.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(  # noqa: SIM115 - closed in the finally below
+        dir=directory, suffix=".upload", delete=False
+    )
+    path = Path(handle.name)
+    size = 0
+    try:
+        while True:
+            chunk = await file.read(UPLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > MAX_VIDEO_BYTES:
+                raise UploadTooLarge(
+                    f"that clip is larger than {MAX_VIDEO_BYTES // (1024 * 1024)}MB"
+                )
+            await asyncio.to_thread(handle.write, chunk)
+    except BaseException:
+        handle.close()
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
+        raise
+    handle.close()
+    return path, size
+
 
 _STATE_TO_STATUS = {
     JobState.QUEUED: TrainingStatus.QUEUED,
@@ -45,7 +149,9 @@ _STATE_TO_STATUS = {
 }
 
 
-def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
+def build_router(
+    settings, current_user, get_db, store, runner, video_jobs: VideoIngestService
+) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/photo-sets/requirements")
@@ -142,69 +248,94 @@ def build_router(settings, current_user, get_db, store, runner) -> APIRouter:
             "half_body": 0.0 < photo.face_height_fraction < 0.33,
         }
 
-    @router.post("/api/photo-sets/{photo_set_id}/video", status_code=201)
+    @router.post("/api/photo-sets/{photo_set_id}/video", status_code=202)
     async def upload_video(
         photo_set_id: str,
         file: UploadFile = File(...),  # noqa: B008
         db: AsyncSession = Depends(get_db),  # noqa: B008
         user_id: str = Depends(current_user),
     ):
-        """A clip in, frames added to the set as if each had been uploaded.
+        """Accept a clip and return a job to watch. Nothing else.
 
-        Every frame goes through the same checks as a photograph, so a clip and
-        an album are held to one standard and the caller reads one shape of
-        result either way.
+        This handler used to read the whole upload into memory, decode sixty
+        frames, and run face detection, sharpness analysis and an object store
+        upload on every one of them, synchronously, on the event loop. That
+        stopped every other request in the process for the duration - long
+        enough for the platform health check on this same port to fail and for
+        everybody on the site, not only the person uploading, to get a 502.
+
+        So the work is a job now. What happens here is bounded by the size of
+        the upload rather than by the length of the video: the bytes go to
+        disk, a row is written, and the id of that row comes back. Frames are
+        taken in the background, and ingest/video_service.py reports on it.
         """
-        data = await file.read()
+        # Decided from the declared type and the filename, before a single
+        # byte is spooled. Writing 256MB to the volume and then refusing it is
+        # work done for nothing.
         if not is_video(file.content_type or "", file.filename or ""):
             raise HTTPException(status_code=400, detail="that is not a video file")
 
         try:
-            frames = extract_frames(data)
-        except VideoError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            path, size = await _spool_upload(file, spool_dir(settings))
+        except UploadTooLarge as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
 
-        # The clip is kept, not just sampled. It is the base the lip-sync
-        # renderer drives, and the head moves in the result because the head
-        # moved in the recording.
-        await store.put(
-            user_id,
-            source_clip_key(user_id, photo_set_id),
-            data,
-            file.content_type or "video/mp4",
-        )
-
-        added = []
-        for index, frame in enumerate(frames):
-            try:
-                photo = await add_photo(
-                    db, store, photo_set_id, user_id,
-                    f"frame-{index:04d}.jpg", "image/jpeg", frame,
-                )
-            except TenantError as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
-            except ValueError:
-                # One unusable frame is not a failed upload. A clip is expected
-                # to contain blinks, blur and turns away from camera; rejecting
-                # the whole video for them would reject every real video.
-                continue
-            added.append(
-                {
-                    "id": photo.id,
-                    "filename": photo.filename,
-                    "accepted": photo.accepted,
-                    "reasons": json.loads(photo.rejection_reasons)
-                    if photo.rejection_reasons
-                    else [],
-                }
+        try:
+            started = await video_jobs.start(
+                db,
+                photo_set_id,
+                user_id,
+                clip_path=path,
+                filename=file.filename or "clip.mp4",
+                content_type=file.content_type or "video/mp4",
+                size_bytes=size,
             )
+        except BaseException as exc:
+            # Nothing is going to read this file now. Refusals here are
+            # ordinary - another tenant's set, a set that has already passed
+            # validation, a clip already being read - and each of them must
+            # leave the volume as it found it.
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
+            if isinstance(exc, TenantError):
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            if isinstance(exc, VideoBusy):
+                # Theirs and real; what is wrong is its state, which they can
+                # act on but not by uploading anything else.
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if isinstance(exc, ValueError):
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise
 
         return {
-            "frames_examined": len(frames),
-            "photos": added,
-            "accepted": sum(1 for p in added if p["accepted"]),
-            "source_clip": True,
+            "job_id": started.job_id,
+            "photo_set_id": started.photo_set_id,
+            "status": "running",
+            "size_bytes": size,
         }
+
+    @router.get("/api/video-jobs/{job_id}")
+    async def video_job_status(
+        job_id: str,
+        db: AsyncSession = Depends(get_db),  # noqa: B008
+        user_id: str = Depends(current_user),
+    ):
+        """Frames taken so far, of how many, and how many were usable."""
+        try:
+            return await video_jobs.read(db, job_id, user_id)
+        except TenantError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/api/video-jobs/{job_id}/cancel")
+    async def cancel_video_job(
+        job_id: str,
+        db: AsyncSession = Depends(get_db),  # noqa: B008
+        user_id: str = Depends(current_user),
+    ):
+        try:
+            return await video_jobs.cancel(db, job_id, user_id)
+        except TenantError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.post(
         "/api/photo-sets/{photo_set_id}/evaluate",

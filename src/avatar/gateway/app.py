@@ -15,6 +15,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from avatar.config import Settings, get_settings
+from avatar.gateway import demo
 from avatar.gateway.auth import (
     SESSION_TTL_SECONDS,
     AuthError,
@@ -24,13 +25,19 @@ from avatar.gateway.auth import (
     register,
 )
 from avatar.gateway.consent import ConsentError
-from avatar.gateway.db import create_all, get_db
+from avatar.gateway.db import create_all, get_db, session_scope
 from avatar.gateway.dispatch import LocalProcessDispatcher
 from avatar.gateway.routes_avatars import build_router as build_avatar_router
-from avatar.gateway.routes_ingest import build_router
+from avatar.gateway.routes_ingest import build_router, sweep_spool
 from avatar.gateway.routes_splat import build_router as build_splat_router
-from avatar.gateway.sessions import assert_production_ready, open_session
+from avatar.gateway.sessions import (
+    assert_demo_mode_safe,
+    assert_production_ready,
+    open_session,
+)
 from avatar.gateway.tenancy import TenantError
+from avatar.gateway.web import mount_web, resolve_web_root
+from avatar.ingest.video_service import VideoIngestService
 from avatar.splat.service import SplatService, build_splat_builder
 from avatar.storage.factory import build_store
 from avatar.training.factory import build_runner
@@ -68,10 +75,32 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
     # given the session source rather than a session: it writes the outcome
     # long after the response has gone.
     splat = SplatService(build_splat_builder(settings, store), store, get_db)
+    # An uploaded clip is minutes of frame checks, and it used to run inside
+    # the request that delivered it - see ingest/video_service.py. Given the
+    # session source for the same reason the splat service is: it writes sixty
+    # rows long after the response has gone.
+    video_jobs = VideoIngestService(store, get_db)
+
+    web_root = resolve_web_root(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await create_all(settings)
+
+        # A clip spooled to the volume by a process that then died is a
+        # quarter of a gigabyte nothing will ever read. Startup is exactly
+        # when that has just happened, so it is where they are cleared.
+        sweep_spool(settings)
+
+        # The half of the demo-mode check that needs a database. Deliberately
+        # here rather than in create_app: the tables do not exist until the
+        # line above, and a check that runs before the thing it inspects is
+        # the kind of dead safety control this project has already been bitten
+        # by twice. Raising here stops the process before it serves anything.
+        if settings.demo_mode:
+            async with session_scope() as db:
+                assert_demo_mode_safe(settings, await demo.real_account_emails(db))
+
         yield
         # Agents outlive a request but not the gateway. Leaving them running
         # would hold GPU capacity and microphones open after a restart.
@@ -79,6 +108,9 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
         # Same rule for splat builds: a gateway going down must not leave a
         # GPU optimising somebody's father with nothing watching it.
         await splat.shutdown()
+        # And for clips being read into frames: the tasks are in this process
+        # and nothing else will finish them.
+        await video_jobs.shutdown()
 
     app = FastAPI(title="Avatar gateway", lifespan=lifespan)
 
@@ -100,39 +132,98 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
     )
 
     def set_session_cookie(response: Response, token: str) -> None:
-        # Lax when the web app and the gateway share a host, none when they do
-        # not. A deployment that serves the site from one domain and this API
-        # from another is cross-site by definition, and a lax cookie is simply
-        # never sent - sign-in appears to succeed and every later request is
-        # anonymous. Browsers only accept samesite=none over https, so it is
-        # tied to the same flag that turns on Secure.
+        # Lax, because this process serves the site as well as the API and the
+        # browser is therefore always making a first-party request. That is the
+        # whole reason the two were brought onto one origin: a cross-site
+        # deployment needs samesite=none, Safari refuses third-party cookies
+        # outright and Chrome refuses them in common configurations, and the
+        # result was a sign-in that returned 200, lost its cookie, and bounced
+        # back to the sign-in page forever.
+        #
+        # COOKIE_SAMESITE=none is still available for a split-origin
+        # deployment. Browsers only accept it over https, so it is downgraded
+        # rather than honoured when the cookie is not also Secure - a cookie
+        # the browser silently discards is worse than a lax one, because the
+        # failure looks like the server.
+        samesite = settings.cookie_samesite.lower()
+        if samesite == "none" and not settings.cookies_secure:
+            samesite = "lax"
+
         response.set_cookie(
             SESSION_COOKIE,
             token,
             httponly=True,
-            samesite="none" if settings.cookies_secure else "lax",
+            samesite=samesite,  # type: ignore[arg-type]
             secure=settings.cookies_secure,
             max_age=SESSION_TTL_SECONDS,
             path="/",
         )
 
     async def current_user(
+        response: Response,
         avatar_session: str | None = Cookie(default=None),
+        db: AsyncSession = Depends(get_db),  # noqa: B008 - FastAPI injection idiom
     ) -> str:
         """The signed-in tenant, or 401.
 
         Every authenticated route depends on this. It returns an id rather than
         a User so that handlers cannot accidentally hold a detached row across
         a request boundary.
+
+        Demo mode changes exactly one thing here: a visitor with no valid
+        session is given the shared demo account and its cookie instead of a
+        401. It is done in this one function rather than in a sign-in endpoint
+        the site would have to call, because that keeps the property "there is
+        one place that decides who you are" - the same reason the consent gate
+        and the tenancy check each live in one module.
+
+        Note what it does not change. It hands back an ordinary user id, so
+        ownership, consent and the synthetic-media declaration all apply to a
+        demo visitor exactly as they apply to a customer.
         """
         user_id = read_session(settings, avatar_session or "")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="sign in required")
-        return user_id
+        if user_id is not None:
+            return user_id
+
+        if settings.demo_mode:
+            user = await demo.ensure(db)
+            set_session_cookie(response, issue_session(settings, user.id))
+            return user.id
+
+        raise HTTPException(status_code=401, detail="sign in required")
+
+    def refuse_credentials_in_demo_mode() -> None:
+        """Demo mode has one account and it is not reachable by password.
+
+        Registering would create a second tenant, which is the one thing the
+        demo must not do: the shared account only stays shared because it is
+        the only account, and the startup check that guards real customer data
+        is written in exactly those terms. Refusing here is what keeps that
+        invariant true at runtime rather than merely at boot.
+        """
+        if settings.demo_mode:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "this deployment is a shared demo and does not take accounts; "
+                    "you are already signed in"
+                ),
+            )
 
     @app.get("/health")
     async def health():
         return {"ok": True}
+
+    @app.get("/api/config")
+    async def public_config():
+        """What the site must know before it renders anything.
+
+        Only demo_mode today, and it is not a convenience: the interface has to
+        state on every screen that this is a shared account whose contents
+        anyone with the link can read, and it cannot state that unless it is
+        told. See components/DemoBanner.tsx.
+        """
+        return {"demo_mode": settings.demo_mode}
 
     @app.post("/api/auth/register", status_code=201)
     async def register_account(
@@ -140,6 +231,7 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
         response: Response,
         db: AsyncSession = Depends(get_db),  # noqa: B008 - FastAPI injection idiom
     ):
+        refuse_credentials_in_demo_mode()
         try:
             user = await register(db, body.email, body.password)
         except AuthError as exc:
@@ -153,6 +245,7 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
         response: Response,
         db: AsyncSession = Depends(get_db),  # noqa: B008 - FastAPI injection idiom
     ):
+        refuse_credentials_in_demo_mode()
         try:
             user = await authenticate(db, body.email, body.password)
         except AuthError as exc:
@@ -190,9 +283,16 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
 
     app.include_router(build_avatar_router(settings, current_user, get_db, store))
     app.include_router(
-        build_router(settings, current_user, get_db, store, runner)
+        build_router(settings, current_user, get_db, store, runner, video_jobs)
     )
     app.include_router(build_splat_router(current_user, get_db, splat))
+
+    # Last, and it has to be: the site is served by a catch-all, and FastAPI
+    # matches in registration order, so mounting it any earlier would shadow
+    # every route above. None means no build is present, which is how the tests
+    # and the split-port development setup run - API only.
+    if web_root is not None:
+        mount_web(app, web_root)
 
     return app
 

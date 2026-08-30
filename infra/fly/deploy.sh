@@ -33,7 +33,10 @@ env_value() {
 }
 
 echo "==> app"
-if ! flyctl apps list 2>/dev/null | grep -qE "^${APP}\b"; then
+# Fly indents its table, so anchoring at the start of the line never
+# matched an existing app and this tried to create one that was already
+# there. Idempotence was the point of the check.
+if ! flyctl apps list 2>/dev/null | grep -qE "(^|[[:space:]])${APP}([[:space:]]|$)"; then
   flyctl apps create "$APP" --org personal
 else
   echo "    ${APP} already exists"

@@ -6,6 +6,7 @@ owner; the application ships with none.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -433,15 +434,28 @@ def build_router(settings, current_user, get_db, store) -> APIRouter:
         if len(data) > MAX_VOICE_BYTES:
             raise HTTPException(status_code=400, detail="that recording is too large")
 
-        verdict = inspect_voice(data)
+        # Both of these off the event loop. inspect_voice shells out to
+        # ffprobe and to ffmpeg's volumedetect, and normalise runs a second
+        # ffmpeg pass with loudnorm over the whole recording: seconds of
+        # blocking on a voicemail, minutes on a five-minute file. Run inline
+        # they stopped every other request in the process, which is the same
+        # bug the video endpoint had.
+        #
+        # Deliberately still awaited by the request rather than turned into a
+        # job. One recording is one ffmpeg pass, not sixty face detections,
+        # and the customer needs the verdict - too quiet, clipped, too short -
+        # while they can still look for a better file. What was wrong was
+        # where it ran, not that the caller waits for it.
+        verdict = await asyncio.to_thread(inspect_voice, data)
         if not verdict.usable:
             raise HTTPException(
                 status_code=400,
                 detail="; ".join(p.value for p in verdict.problems),
             )
 
+        normalised = await asyncio.to_thread(normalise, data)
         stored = await store.put(
-            user_id, voice_key(user_id, avatar_id), normalise(data), "audio/wav"
+            user_id, voice_key(user_id, avatar_id), normalised, "audio/wav"
         )
 
         avatar.voice_key = stored.key

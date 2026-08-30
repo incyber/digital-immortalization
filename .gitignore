@@ -33,3 +33,9 @@ __pycache__/
 
 # Generated avatar assets (source material and derived plates)
 assets/
+
+# The built web app, planted here by `make web-build` so the gateway can serve
+# it from the same origin as the API. Generated output, not source: the source
+# is apps/web. It is ignored here and still reaches the image, because the
+# build context is governed by .dockerignore rather than by this file.
+src/avatar/gateway/webroot/
