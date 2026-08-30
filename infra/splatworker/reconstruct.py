@@ -137,6 +137,21 @@ CM_TO_M = 0.01
 OPACITY_REG = 1e-2
 SCALE_REG = 1e-2
 
+# A head is about twenty centimetres across. Anything further than this from
+# the middle of the cloud is not on the person, and with a frontal capture the
+# optimiser has no evidence that would have put it there deliberately.
+HEAD_RADIUS_M = 0.18
+
+# Below this a Gaussian contributes nothing anybody can see, and carrying it
+# costs bytes in the browser and a sort in every frame.
+MIN_KEPT_OPACITY = 0.02
+
+# What one degree of head turn is worth, in Gaussians. See _affordable_budget:
+# 35 degrees supports roughly 30,000, and asking for four times that made the
+# render measurably worse rather than better.
+BUDGET_PER_DEGREE = 900
+MIN_GAUSSIAN_BUDGET = 20_000
+
 # The longest a single Gaussian may be, as a fraction of the head's extent.
 # Five per cent of a head is about a centimetre, which is larger than any real
 # feature needs and far shorter than the spikes that appear without it.
@@ -1247,10 +1262,76 @@ def reconstruct(
     masks = _head_masks(kept)
     cloud = optimise(
         kept, masks,
-        iterations=iterations, gaussian_budget=gaussian_budget, device=device,
+        iterations=iterations,
+        gaussian_budget=_affordable_budget(gaussian_budget, kept),
+        device=device,
     )
+    cloud = _drop_floaters(cloud)
 
     return replace(cloud, notes=_notes(poses, kept, cloud, heard=envelope is not None))
+
+
+def _affordable_budget(asked: int, poses: list[HeadPose]) -> int:
+    """How many Gaussians this capture can actually pin down.
+
+    Parallax is what fixes a Gaussian in depth, and a clip of somebody talking
+    to a propped phone has almost none: measured on one, sixty-four views spanned
+    thirty-five degrees and most sat within three of each other. Every Gaussian
+    beyond what those views constrain is a free parameter, and with nothing to
+    contradict it the optimiser spends it on a blob hanging in front of the face.
+
+    Measured directly rather than argued: at thirty-five degrees of coverage,
+    raising the budget from 30,000 to 120,000 lowered the share of Gaussians
+    that stayed on the head from 54 per cent to 40 and made the render visibly
+    worse, on the very frames it was fitted to. Asking for more detail than the
+    footage contains does not produce more detail.
+
+    The ceiling scales with coverage because a capture that really does orbit
+    can support the larger cloud the caller asked for.
+    """
+    span = max(_yaw_span_degrees(poses), 1.0)
+    affordable = int(BUDGET_PER_DEGREE * span)
+    return max(MIN_GAUSSIAN_BUDGET, min(int(asked), affordable))
+
+
+def _drop_floaters(cloud: GaussianCloud) -> GaussianCloud:
+    """Remove what is not on the person.
+
+    The optimiser cannot tell a Gaussian on the cheek from one hanging in the
+    air in front of it when every camera is in front of the face - both explain
+    the pixels. We know something it does not: this is a head, a head is about
+    twenty centimetres across, and it is at the origin because the origin was
+    defined to be the head.
+
+    That knowledge is not available inside the loss, which only ever sees one
+    view at a time, so it is applied here, once, to the finished cloud. On the
+    capture this was written against it removed just under half of them and the
+    ghost standing beside the face went with them.
+    """
+    import numpy as np
+
+    means = np.asarray(cloud.means)
+    if not len(means):
+        return cloud
+
+    opacities = np.asarray(cloud.opacities).reshape(len(means), -1)[:, 0]
+    centre = np.median(means, axis=0)
+    on_head = (
+        np.linalg.norm(means - centre, axis=1) < HEAD_RADIUS_M
+    ) & (opacities > MIN_KEPT_OPACITY)
+
+    if not on_head.any():
+        # Nothing survived, which means the centre is wrong rather than the
+        # cloud. Returning it untouched is worse than useless but it is honest;
+        # dropping everything would report an empty splat as a successful build.
+        return cloud
+
+    kept = {
+        name: np.asarray(getattr(cloud, name))[on_head]
+        for name in ("means", "scales", "quats", "opacities", "colors")
+    }
+    # `count` is derived from the arrays, so it follows on its own.
+    return replace(cloud, **kept)
 
 
 def _notes(

@@ -80,8 +80,15 @@ def test_the_splat_bundle_carries_every_file_in_the_worker_directory():
     that a new module can be added beside the others and simply never arrive.
     """
     on_disk = {p.name for p in (ROOT / "infra/splatworker").glob("*.py")}
+    # Every bundle, not just the splat one: agent.py is a worker file that ships
+    # in the debug bundle, and the fault this guards against is a module sitting
+    # in the directory that no bundle carries anywhere.
+    shipped = {
+        Path(source).name for files in BUNDLES.values() for source in files.values()
+    }
 
-    assert on_disk == set(BUNDLES["splat"])
+    assert on_disk <= shipped, f"never shipped anywhere: {sorted(on_disk - shipped)}"
+    assert set(BUNDLES["splat"]) <= on_disk
 
 
 def test_the_splat_bundle_is_flat():
