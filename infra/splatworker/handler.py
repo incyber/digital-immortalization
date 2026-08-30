@@ -411,6 +411,28 @@ if __name__ == "__main__":
     # Imported here rather than at module scope so this file loads - and is
     # testable - on a machine that has no runpod package, which is every
     # machine except the worker.
-    import runpod
+    #
+    # Wrapped, because the worker logs are unreachable from the API and a
+    # handler that dies on import is indistinguishable from one that never
+    # started. The traceback goes to the same place the bootstrap writes its
+    # breadcrumbs, which is somewhere we can actually read.
+    try:
+        import runpod
 
-    runpod.serverless.start({"handler": handler})
+        print("[handler] starting serverless loop", flush=True)
+        runpod.serverless.start({"handler": handler})
+    except BaseException as exc:  # includes SystemExit, which is the quiet one
+        import traceback
+
+        detail = f"handler failed to start: {exc}\n{traceback.format_exc()}"
+        print(detail, flush=True)
+        try:
+            import sys as _sys
+
+            _sys.path.insert(0, "/opt")
+            import bootstrap
+
+            bootstrap.log(detail)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        raise

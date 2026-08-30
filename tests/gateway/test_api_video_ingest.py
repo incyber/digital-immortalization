@@ -298,6 +298,12 @@ async def test_the_frames_land_in_the_photo_set_and_the_clip_is_kept(client, tmp
     stored = tmp_path / "blobs" / source_clip_key(owner_id, set_id)
     assert stored.exists(), "the source clip was not kept"
 
+    # And the spooled upload is gone. Two hundred and fifty megabytes of these
+    # accumulating on the volume is a full disk with nothing pointing at the
+    # cause, so the job deletes its own file whatever the outcome.
+    spool = tmp_path / "assets" / "uploads"
+    assert not spool.exists() or not list(spool.glob("*"))
+
 
 async def test_a_job_whose_process_died_is_reported_as_failed(client, tmp_path):
     """A restart must leave evidence, not a bar frozen at forty percent.

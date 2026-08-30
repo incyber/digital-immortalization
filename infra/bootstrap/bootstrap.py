@@ -55,6 +55,42 @@ class BootstrapError(RuntimeError):
 
 def log(message: str) -> None:
     print(f"[bootstrap] {message}", flush=True)
+    _breadcrumb(message)
+
+
+def _breadcrumb(message: str) -> None:
+    """Write one line of progress where we can actually read it.
+
+    The platform's worker logs turned out to be unreachable from the API, and
+    a worker that starts and then does nothing is indistinguishable from one
+    that never started. Since this process already holds credentials for the
+    operator's own bucket, it says where it got to there instead.
+
+    Best effort in every direction: a breadcrumb that fails must never be the
+    reason a worker does not run, and it must never delay one.
+    """
+    if not (BUNDLE_BUCKET and BUNDLE_ACCESS_KEY):
+        return
+    try:
+        import time
+
+        import boto3
+
+        boto3.client(
+            "s3",
+            endpoint_url=BUNDLE_ENDPOINT or None,
+            aws_access_key_id=BUNDLE_ACCESS_KEY,
+            aws_secret_access_key=BUNDLE_SECRET_KEY,
+            region_name="auto",
+        ).put_object(
+            Bucket=BUNDLE_BUCKET,
+            Key=f"worker-log/{os.environ.get('RUNPOD_POD_ID', 'unknown')}/"
+            f"{time.time():.3f}.txt",
+            Body=message.encode()[:4000],
+            ContentType="text/plain",
+        )
+    except Exception:  # noqa: BLE001, S110 - never let reporting break the run
+        pass
 
 
 def fetch() -> bytes:
@@ -134,7 +170,9 @@ def main() -> int:
         # Fail loudly and immediately. On serverless this ends the job in
         # seconds; on a pod the supervisor never starts, so nothing renders and
         # the lease expires unrenewed.
-        log(f"FATAL: {exc}")
+        import traceback
+
+        log(f"FATAL: {exc}\n{traceback.format_exc()}")
         return 1
 
     entry = DEST / ENTRYPOINT
@@ -142,6 +180,9 @@ def main() -> int:
         log(f"FATAL: {entry} is not in the bundle")
         return 1
 
+    # The last thing said before control leaves this process. If the breadcrumbs
+    # stop here, the handler itself is what failed, and its own traceback goes
+    # nowhere - which is worth knowing rather than guessing at.
     log(f"exec {entry}")
     os.execv(sys.executable, [sys.executable, "-u", str(entry)])
     return 0  # unreachable
