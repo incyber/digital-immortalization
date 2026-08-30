@@ -25,6 +25,23 @@ primary_region = "iad"
   PRODUCTION = "true"
   COOKIES_SECURE = "true"
 
+  # The real GPU route. The default is "fake", which writes something
+  # splat-shaped that is nobody, and assert_production_ready refuses to boot on
+  # it - deliberately, because the call gate cannot tell the difference between
+  # a placeholder likeness and a real one once splat_key is set.
+  SPLAT_BACKEND = "runpod"
+
+  # Demo mode skips sign-in so somebody can reach a call without an account. It
+  # does not skip consent, and it refuses to run if any real account exists.
+  # Moved here from a Fly secret: it is a behaviour flag, not a credential, and
+  # a deployment's behaviour should be readable in the file that describes it.
+  #
+  # There is still a DEMO_MODE Fly secret holding the same value, and a secret
+  # wins over this. Removing it restarts the machine, which is a production
+  # change, so it waits for a deploy that was actually asked for:
+  #     fly secrets unset DEMO_MODE
+  DEMO_MODE = "true"
+
   # The site and this API are on different domains, so the session cookie is
   # issued samesite=none and every request from the browser is cross-site.
   # An origin missing from this list gets a sign-in that appears to work and
