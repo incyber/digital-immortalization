@@ -180,6 +180,29 @@ class Provisioner:
             raise ServerlessError("endpoint creation returned no id")
         return endpoint_id
 
+    def retarget_template(self, template_id: str, image: str, env: dict[str, str]) -> None:
+        """Point an existing template at a new image, resending its whole env.
+
+        The platform does not return `env` when a template is read, so an
+        update that omits it silently empties it - the worker then starts,
+        finds no bucket to fetch from, and does nothing anybody can see. So
+        the caller passes the complete environment every time and this refuses
+        an obviously incomplete one rather than shipping a broken worker.
+        """
+        required = ("BUNDLE_BUCKET", "BUNDLE_KEY", "BUNDLE_SHA256")
+        missing = [name for name in required if not env.get(name)]
+        if missing:
+            raise ServerlessError(
+                "refusing to update the template without " + ", ".join(missing)
+            )
+
+        self._request(
+            "PATCH",
+            f"/templates/{template_id}",
+            json={"imageName": image, "env": env},
+        )
+        logger.info(f"template {template_id} -> {image}")
+
     def read_endpoint(self, endpoint_id: str) -> dict:
         return self._request("GET", f"/endpoints/{endpoint_id}")
 

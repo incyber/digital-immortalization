@@ -63,7 +63,7 @@ from avatar.persona import Persona, build_system_prompt, persona_from_avatar
 from avatar.realtime.video_publisher import LiveKitVideoPublisher
 from avatar.realtime.warmup import warm
 from avatar.renderer.base import RendererStage
-from avatar.renderer.plates import AvatarAssets, synthetic_assets
+from avatar.renderer.plates import AvatarAssets
 from avatar.renderer.processor import RendererProcessor
 from avatar.renderer.viseme import VisemeRenderer
 from avatar.safety.processor import CrisisProcessor
@@ -71,6 +71,10 @@ from avatar.services.llm_fallback import FallbackLLMService, build_providers
 from avatar.services.speech import build_stt, build_tts
 from avatar.vision.processor import VisionSampler
 from avatar.vision.state import SceneState
+
+
+class NoLikeness(RuntimeError):
+    """Raised rather than showing something that is not the person."""
 
 
 def build_renderer(cfg: Settings, assets_path: str | None = None) -> RendererStage:
@@ -94,17 +98,21 @@ def build_renderer(cfg: Settings, assets_path: str | None = None) -> RendererSta
     if cfg.renderer_backend != "viseme":
         raise ValueError(f"unknown renderer_backend {cfg.renderer_backend!r}")
 
-    if assets_path and Path(assets_path).exists():
-        assets = AvatarAssets.load(Path(assets_path))
-    else:
-        # No source material yet. The generated stand-in keeps the call
-        # runnable end to end, which is what lets the rest of the system be
-        # developed before any customer has uploaded a clip.
-        logger.warning(f"no assets at {assets_path!r}; using the generated stand-in avatar")
-        assets = synthetic_assets(
-            size=(cfg.video_width, cfg.video_height), fps=cfg.video_fps
+    if not (assets_path and Path(assets_path).exists()):
+        # There used to be a generated stand-in here so a call could run before
+        # anybody had uploaded anything. It reached a customer, who saw a
+        # photograph with a mouth cut into it and reasonably concluded the
+        # product did not work.
+        #
+        # A likeness that is not this person is worse than no call. Somebody
+        # opening this is looking for their father, and showing them an
+        # approximation is a specific kind of harm that an error message is
+        # not. So there is no fallback: no assets, no call.
+        raise NoLikeness(
+            "this avatar has no likeness built yet, so there is nothing to show"
         )
-    return VisemeRenderer(assets)
+
+    return VisemeRenderer(AvatarAssets.load(Path(assets_path)))
 
 
 async def load_persona(cfg: Settings, avatar_id: str) -> Persona:

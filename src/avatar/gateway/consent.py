@@ -77,3 +77,39 @@ async def revoke(db: AsyncSession, avatar_id: str, note: str) -> None:
     record.status = ConsentStatus.REVOKED
     record.notes = f"{record.notes or ''}\nrevoked {datetime.now(UTC).isoformat()}: {note}"
     await db.commit()
+
+
+class NoLikeness(RuntimeError):
+    """There is nothing built for this avatar, so there is nothing to show.
+
+    Separate from a consent failure because it means something different to
+    the person reading it: consent is a permission they may not be able to
+    obtain, and this is a step they have not finished yet.
+    """
+
+
+async def assert_has_likeness(db: AsyncSession, avatar_id: str) -> None:
+    """Refuse a call until a real likeness exists.
+
+    There was a generated stand-in behind this once - a still photograph with
+    a mouth warped into it - so that a call could run before anybody had
+    uploaded anything. It reached a customer, who saw it and reasonably
+    concluded the product did not work.
+
+    Somebody opening this is looking for a person who has died. An
+    approximation of them is not a lesser version of the product, it is a
+    different and worse thing, and no amount of "it is only a placeholder"
+    survives contact with the moment they see it. So: something real, or
+    nothing.
+    """
+    from avatar.gateway.models import Avatar
+
+    avatar = (
+        await db.execute(select(Avatar).where(Avatar.id == avatar_id))
+    ).scalar_one_or_none()
+
+    if avatar is None or not (avatar.splat_key or avatar.assets_key):
+        raise NoLikeness(
+            "there is no likeness for this person yet - upload a video or "
+            "photographs and build one first"
+        )

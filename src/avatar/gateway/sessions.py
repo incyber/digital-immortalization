@@ -16,7 +16,7 @@ from livekit import api
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from avatar.config import Settings
-from avatar.gateway.consent import assert_consented
+from avatar.gateway.consent import assert_consented, assert_has_likeness
 from avatar.gateway.demo import DEMO_EMAIL
 from avatar.gateway.dispatch import AgentDispatcher
 from avatar.gateway.models import Session
@@ -70,7 +70,7 @@ async def open_session(
 ) -> dict[str, str]:
     """Create a room, put an agent in it, and return joining details.
 
-    Two independent gates, in this order:
+    Three independent gates, in this order:
 
       Ownership - is this avatar this tenant's business at all? Checked first,
       so a stranger probing avatar ids cannot learn which exist or what their
@@ -78,14 +78,22 @@ async def open_session(
 
       Consent - is a recreation permitted at all? Checked second.
 
-    Neither implies the other. An avatar can be fully consented and belong to
+      Likeness - is there something real to show? Checked last, because it is
+      the only one that can be fixed by the customer doing something.
+
+    None implies the others. An avatar can be fully consented and belong to
     somebody else entirely. Nothing is written, no token exists, and no agent
-    is dispatched unless both pass.
+    is dispatched unless all three pass.
+
+    The likeness gate exists because a call with nothing built used to fall
+    back to a generated stand-in. Somebody looking for their father was shown
+    an approximation of him, which is worse than being told to wait.
     """
     # Called for the check, not the row: the agent loads the character
     # itself from the database.
     await assert_owned(db, avatar_id, owner_id)
     consent = await assert_consented(db, avatar_id)
+    await assert_has_likeness(db, avatar_id)
 
     room = f"call-{uuid.uuid4().hex[:12]}"
     session = Session(avatar_id=avatar_id, room_name=room)

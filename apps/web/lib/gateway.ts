@@ -435,6 +435,9 @@ export type SessionDetails = {
 
 export class ConsentRefused extends Error {}
 
+/** Nothing has been built for this person yet, so there is nothing to show. */
+export class NoLikeness extends Error {}
+
 export async function openSession(avatarId: string): Promise<SessionDetails> {
   const response = await fetch(`${GATEWAY}/api/sessions`, {
     method: "POST",
@@ -447,6 +450,12 @@ export async function openSession(avatarId: string): Promise<SessionDetails> {
     // The avatar is theirs and real; what is missing is verified consent.
     const body = await response.json().catch(() => ({ detail: "consent refused" }));
     throw new ConsentRefused(body.detail);
+  }
+  if (response.status === 409) {
+    // Distinct from a consent refusal: this is the one gate the person on the
+    // other side can clear themselves, by uploading a video or photographs.
+    const body = await response.json().catch(() => ({ detail: "no likeness yet" }));
+    throw new NoLikeness(body.detail);
   }
   if (!response.ok) throw new ApiError(`gateway returned ${response.status}`, response.status);
   return response.json();

@@ -24,7 +24,7 @@ from avatar.gateway.auth import (
     read_session,
     register,
 )
-from avatar.gateway.consent import ConsentError
+from avatar.gateway.consent import ConsentError, NoLikeness
 from avatar.gateway.db import create_all, get_db, session_scope
 from avatar.gateway.dispatch import LocalProcessDispatcher
 from avatar.gateway.routes_avatars import build_router as build_avatar_router
@@ -280,6 +280,12 @@ def create_app(cfg: Settings | None = None) -> FastAPI:
             # 403 rather than 404 here: the avatar is theirs, it is real, and
             # the reason it cannot be called is permission they can act on.
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except NoLikeness as exc:
+            # 409, because nothing is wrong and nothing is forbidden - a step
+            # simply has not finished. This used to be a call that opened
+            # anyway and showed a generated stand-in, which a customer saw and
+            # reasonably took for the finished product.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     app.include_router(build_avatar_router(settings, current_user, get_db, store))
     app.include_router(

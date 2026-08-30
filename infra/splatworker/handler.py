@@ -57,8 +57,37 @@ import time
 import uuid
 from pathlib import Path
 
-import generate
-import reconstruct
+
+def _fatal(detail: str) -> None:
+    """Put a traceback somewhere it can be read.
+
+    Defined before the first application import on purpose. The platform's
+    worker logs are unreachable from the API, so a module that dies while
+    importing leaves no trace at all: the bootstrap's last breadcrumb says
+    "exec handler.py" and then nothing, forever, which is what happened.
+
+    Best effort. A worker that cannot report why it failed must still fail.
+    """
+    print(detail, flush=True)
+    try:
+        import sys as _sys
+
+        _sys.path.insert(0, "/opt")
+        import bootstrap
+
+        bootstrap.log(detail)
+    except Exception:  # noqa: BLE001, S110 - reporting must never mask the fault
+        pass
+
+
+try:
+    import generate
+    import reconstruct
+except BaseException as exc:  # re-raised after reporting
+    import traceback
+
+    _fatal(f"handler failed to import: {exc}\n{traceback.format_exc()}")
+    raise
 
 # Object storage, named exactly as it is in avatar/config.py so one set of
 # variables configures the gateway and the worker.
@@ -424,15 +453,5 @@ if __name__ == "__main__":
     except BaseException as exc:  # includes SystemExit, which is the quiet one
         import traceback
 
-        detail = f"handler failed to start: {exc}\n{traceback.format_exc()}"
-        print(detail, flush=True)
-        try:
-            import sys as _sys
-
-            _sys.path.insert(0, "/opt")
-            import bootstrap
-
-            bootstrap.log(detail)
-        except Exception:  # noqa: BLE001, S110
-            pass
+        _fatal(f"handler failed to start: {exc}\n{traceback.format_exc()}")
         raise

@@ -6,8 +6,29 @@ from avatar.config import Settings
 from avatar.realtime.agent import build_renderer
 
 
-def test_viseme_backend_is_the_local_default():
-    r = build_renderer(Settings(_env_file=None))
+def _real_assets(tmp_path):
+    """A minimal but genuine asset bundle on disk.
+
+    Genuine because the renderer no longer accepts anything else: there is no
+    generated stand-in behind it to fall back to.
+    """
+    import numpy as np
+
+    from avatar.renderer.plates import PLATE_COUNT, AvatarAssets
+
+    frame = np.zeros((512, 512, 3), dtype=np.uint8)
+    AvatarAssets(
+        idle_frames=[frame],
+        mouth_box=(200, 320, 112, 64),
+        plates=[np.zeros((64, 112, 3), dtype=np.uint8) for _ in range(PLATE_COUNT)],
+        fps=25,
+        size=(512, 512),
+    ).save(tmp_path / "assets")
+    return str(tmp_path / "assets")
+
+
+def test_viseme_backend_is_the_local_default(tmp_path):
+    r = build_renderer(Settings(_env_file=None), assets_path=_real_assets(tmp_path))
     assert r.size == (512, 512)
     assert r.fps == 25
 
@@ -36,9 +57,17 @@ def test_unknown_backend_is_rejected():
         build_renderer(Settings(_env_file=None, renderer_backend="wishful"))
 
 
-def test_missing_assets_fall_back_to_the_stand_in(tmp_path):
-    r = build_renderer(Settings(_env_file=None), assets_path=str(tmp_path / "nope"))
-    assert r is not None
+def test_missing_assets_refuse_rather_than_inventing_a_face(tmp_path):
+    """This used to generate a stand-in from nothing and start the call.
+
+    Somebody opening this is looking for a person who has died. A face that is
+    not theirs is not a degraded version of the product, it is a different and
+    worse one, so the call does not start at all.
+    """
+    from avatar.realtime.agent import NoLikeness
+
+    with pytest.raises(NoLikeness):
+        build_renderer(Settings(_env_file=None), assets_path=str(tmp_path / "nope"))
 
 
 def test_pipeline_places_the_guardrail_before_the_model():

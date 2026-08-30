@@ -231,6 +231,10 @@ async def test_the_consent_gate_still_opens_for_a_verified_record(demo_client):
                 status=ConsentStatus.VERIFIED,
             )
         )
+        # And a likeness, because consent alone no longer opens a call - there
+        # has to be something real to show.
+        avatar = await db.get(Avatar, avatar_id)
+        avatar.splat_key = f"tenants/demo/avatars/{avatar_id}/avatar.splat"
         await db.commit()
 
     response = await demo_client.post("/api/sessions", json={"avatar_id": avatar_id})

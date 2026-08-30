@@ -80,3 +80,16 @@ async def other_owner(db: AsyncSession):
     db.add(u)
     await db.commit()
     return u
+
+
+@pytest_asyncio.fixture
+async def callable_avatar(db: AsyncSession, verified_avatar):
+    """Consented AND built - the only combination that opens a call.
+
+    Kept separate from `verified_avatar` on purpose: consent and likeness are
+    independent gates, and a fixture that satisfied both would hide the
+    difference from every test that depends on it.
+    """
+    verified_avatar.splat_key = f"tenants/t/avatars/{verified_avatar.id}/avatar.splat"
+    await db.commit()
+    return verified_avatar

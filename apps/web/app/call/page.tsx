@@ -27,6 +27,7 @@ import {
   api,
   ApiError,
   ConsentRefused,
+  NoLikeness,
   openSession,
   type Avatar,
   type SessionDetails,
@@ -63,6 +64,9 @@ export default function Call() {
   const [session, setSession] = useState<SessionDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refused, setRefused] = useState<string | null>(null);
+  // Held apart from `refused` because the remedy is different: consent is
+  // somebody else's signature, a likeness is an upload away.
+  const [unbuilt, setUnbuilt] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
@@ -106,6 +110,7 @@ export default function Call() {
     setConnecting(true);
     setError(null);
     setRefused(null);
+    setUnbuilt(null);
     try {
       setSession(await openSession(avatarId));
     } catch (e: unknown) {
@@ -113,6 +118,7 @@ export default function Call() {
       // verified, which is a thing somebody is waiting on rather than a thing
       // they did wrong, and it is said in those terms.
       if (e instanceof ConsentRefused) setRefused(e.message);
+      else if (e instanceof NoLikeness) setUnbuilt(e.message);
       else setError(e instanceof Error ? e.message : "Could not start the call");
     } finally {
       setConnecting(false);
@@ -163,6 +169,27 @@ export default function Call() {
                 <p className="mt-2 text-footnote text-label-tertiary">
                   Permission has to be verified before any call can open.
                 </p>
+              </Notice>
+            )}
+
+            {unbuilt && (
+              <Notice
+                tone="attention"
+                role="status"
+                title="There is no likeness yet."
+                className="max-w-md text-left"
+              >
+                <p className="first-letter:uppercase">{unbuilt}.</p>
+                <p className="mt-2 text-footnote text-label-tertiary">
+                  A call only ever shows the real person, so it waits until one
+                  has been built.
+                </p>
+                <Link
+                  href={`/avatars/${avatarId}`}
+                  className="mt-3 inline-block text-footnote underline"
+                >
+                  Add a video or photographs
+                </Link>
               </Notice>
             )}
 

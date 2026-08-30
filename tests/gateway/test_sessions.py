@@ -20,8 +20,8 @@ async def test_open_session_writes_nothing_when_refused(db, cfg, avatar, owner):
     assert count == 0, "a refused request must leave no session row behind"
 
 
-async def test_open_session_returns_joinable_details(db, cfg, verified_avatar, owner):
-    out = await open_session(db, cfg, verified_avatar.id, owner.id)
+async def test_open_session_returns_joinable_details(db, cfg, callable_avatar, owner):
+    out = await open_session(db, cfg, callable_avatar.id, owner.id)
     assert out["url"].startswith("ws")
     assert out["room"].startswith("call-")
     assert len(out["token"].split(".")) == 3
@@ -36,9 +36,9 @@ async def test_token_is_scoped_to_one_room(cfg):
     assert claims["video"]["roomJoin"] is True
 
 
-async def test_each_session_gets_a_distinct_room(db, cfg, verified_avatar, owner):
-    a = await open_session(db, cfg, verified_avatar.id, owner.id)
-    b = await open_session(db, cfg, verified_avatar.id, owner.id)
+async def test_each_session_gets_a_distinct_room(db, cfg, callable_avatar, owner):
+    a = await open_session(db, cfg, callable_avatar.id, owner.id)
+    b = await open_session(db, cfg, callable_avatar.id, owner.id)
     assert a["room"] != b["room"]
 
 
@@ -60,6 +60,8 @@ async def test_a_self_attested_avatar_is_callable(db, cfg, avatar, owner):
     from tests.gateway.helpers import set_status
 
     await set_status(db, avatar, "self_attested")
+    avatar.splat_key = f"tenants/t/avatars/{avatar.id}/avatar.splat"
+    await db.commit()
     out = await open_session(db, cfg, avatar.id, owner.id)
     assert out["room"].startswith("call-")
 
@@ -69,17 +71,19 @@ async def test_agent_is_dispatched_for_a_self_attested_avatar(db, cfg, avatar, o
     from tests.gateway.helpers import set_status
 
     await set_status(db, avatar, "self_attested")
+    avatar.splat_key = f"tenants/t/avatars/{avatar.id}/avatar.splat"
+    await db.commit()
     dispatcher = NullDispatcher()
     out = await open_session(db, cfg, avatar.id, owner.id, dispatcher)
     assert dispatcher.calls == [(out["room"], avatar.id)]
 
 
-async def test_agent_is_dispatched_into_the_room(db, cfg, verified_avatar, owner):
+async def test_agent_is_dispatched_into_the_room(db, cfg, callable_avatar, owner):
     from avatar.gateway.dispatch import NullDispatcher
 
     dispatcher = NullDispatcher()
-    out = await open_session(db, cfg, verified_avatar.id, owner.id, dispatcher)
-    assert dispatcher.calls == [(out["room"], verified_avatar.id)]
+    out = await open_session(db, cfg, callable_avatar.id, owner.id, dispatcher)
+    assert dispatcher.calls == [(out["room"], callable_avatar.id)]
 
 
 async def test_no_agent_is_dispatched_when_consent_is_refused(db, cfg, avatar, owner):
@@ -112,7 +116,7 @@ async def test_agent_tokens_may_publish_the_declaration(cfg):
 
 
 async def test_a_stranger_cannot_open_a_session_on_someone_elses_avatar(
-    db, cfg, verified_avatar, other_owner
+    db, cfg, callable_avatar, other_owner
 ):
     # The avatar is real and fully consented. It is still not theirs.
     from avatar.gateway.dispatch import NullDispatcher
@@ -120,7 +124,7 @@ async def test_a_stranger_cannot_open_a_session_on_someone_elses_avatar(
 
     dispatcher = NullDispatcher()
     with pytest.raises(TenantError):
-        await open_session(db, cfg, verified_avatar.id, other_owner.id, dispatcher)
+        await open_session(db, cfg, callable_avatar.id, other_owner.id, dispatcher)
     assert dispatcher.calls == [], "no agent may be dispatched for another tenant"
 
 
