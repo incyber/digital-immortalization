@@ -1,0 +1,95 @@
+# Builds the gateway image and pushes it to the container registry, so that a
+# deployment is a pull rather than a build.
+#
+# Fly builds this itself, normally. Normally is doing some work in that
+# sentence: on the day this was added, its Depot builder returned
+# "deadline_exceeded" for half an hour, its own remote builder hit a flyctl bug
+# parsing the Docker daemon host, and the only path left was an emulated
+# amd64 cross-build on Apple Silicon - which the gpu-worker workflow already
+# describes, from experience, as "measured in hours".
+#
+# A runner is native amd64 and does it in minutes. Having this here means a
+# deployment never again depends on a third party's build service being up:
+#
+#     gh workflow run app-image.yml -f tag=v5
+#     fly deploy --image ghcr.io/<owner>/<repo>/app:v5
+#
+# Push-triggered on the working branch as well as by hand, so the image for a
+# given commit usually exists before anybody wants to deploy it.
+name: app-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to publish
+        required: true
+        default: latest
+  push:
+    branches:
+      - feat/live-avatar-call
+    paths:
+      # Only what ends up inside the image. A change to the GPU worker or to
+      # the plans directory does not need a new gateway image.
+      - "Dockerfile"
+      - "docker-entrypoint.sh"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/**"
+      - "apps/web/**"
+      - ".github/workflows/app-image.yml"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}/app
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Both the commit and a moving tag. The commit tag is what a deployment
+      # should name, so that "what is running" has an answer that does not
+      # change under it; the moving one is for a quick redeploy by hand.
+      - name: Name the image
+        id: names
+        run: |
+          moving="${{ inputs.tag || 'latest' }}"
+          echo "tags=${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ github.sha }},${{ env.REGISTRY }}/${{ env.IMAGE }}:$moving" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.names.outputs.tags }}
+          # Without this the manifest is an OCI index that some registries and
+          # pullers refuse. The GPU worker spent seventy-one minutes in "image
+          # pull: pending" learning that.
+          provenance: mode=min
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report
+        run: |
+          echo "pushed ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Deploy it with:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "fly deploy --image ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
