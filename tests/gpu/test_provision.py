@@ -100,7 +100,10 @@ def test_the_endpoint_request_carries_the_safe_settings():
 
     assert sent["workersMin"] == 0
     assert sent["workersMax"] == 1
-    assert sent["idleTimeout"] == 5
+    # Long enough for a worker to finish downloading its own code and claim a
+    # job. At five seconds the platform stopped it first, every time, and the
+    # queue never drained.
+    assert sent["idleTimeout"] == 30
     # Milliseconds, which is what the API takes. Sending seconds here would
     # give a 900ms timeout that kills every real job.
     assert sent["executionTimeoutMs"] == 900_000

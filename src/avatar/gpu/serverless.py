@@ -13,7 +13,7 @@ no pod to forget, because between jobs nothing exists. Three provider-enforced
 guarantees do the work, all verified in RunPod's documentation:
 
     workersMin = 0        nothing stays allocated when idle
-    idleTimeout = 5s      a worker shuts down 5 seconds after finishing
+    idleTimeout = 30s     a worker shuts down 30 seconds after finishing
     executionTimeout      "when exceeded, the job fails and the worker stops"
 
 None of those depend on this code being correct, running, or even alive. The
@@ -40,9 +40,17 @@ API = "https://api.runpod.ai/v2"
 # ceiling that matters, and it is enforced by RunPod rather than here.
 DEFAULT_EXECUTION_TIMEOUT_S = 900
 
-# How long a worker lingers after finishing. Low because our work is bursty at
-# signup; a cold start costs seconds, an idle worker costs money.
-DEFAULT_IDLE_TIMEOUT_S = 5
+# How long a worker lingers after finishing. Was 5s, on the reasoning that our
+# work is bursty and an idle worker costs money. That reasoning was right about
+# the money and wrong about the clock: this worker downloads and verifies its
+# code before it can poll for anything, which takes about fifteen seconds, and
+# the platform was sending SIGTERM at eight. Jobs sat in the queue while a
+# healthy worker was started and stopped underneath them, over and over.
+#
+# Thirty seconds is still far below the sixty-second ceiling the safety check
+# enforces, and the idle time it can cost - about a third of a cent per job -
+# buys a worker that survives long enough to claim one.
+DEFAULT_IDLE_TIMEOUT_S = 30
 
 # A concurrency cap that doubles as a spend cap: this many workers is the most
 # that can ever bill at once.

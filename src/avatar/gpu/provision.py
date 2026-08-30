@@ -5,7 +5,7 @@ than by us:
 
     workersMin = 0          nothing stays allocated when idle
     workersMax = 1          at most one worker can ever bill at once
-    idleTimeout = 5s        a worker stops 5 seconds after finishing
+    idleTimeout = 30s       a worker stops 30 seconds after finishing
     executionTimeoutMs      "when exceeded, the job fails and the worker stops"
 
 Sending those at creation is not the same as having them. The previous design's
