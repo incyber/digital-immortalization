@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # The splat worker: gsplat and TRELLIS in one image, and none of our code.
 #
 # Its own image rather than a task on infra/serverless. That one carries
@@ -18,8 +19,9 @@
 #   TRELLIS + TRELLIS-image-large  MIT, code and weights.
 #   DINOv2 (TRELLIS's conditioner) Apache-2.0 since the 2023 relicence.
 #   MediaPipe + its task bundles   Apache-2.0.
-#   spconv, FlexiCubes             Apache-2.0. plyfile, xformers  BSD.
-#   rembg MIT, its u2net weights   Apache-2.0.
+#   spconv  Apache-2.0.  xformers  BSD.  utils3d, open3d, rembg  MIT.
+#   FlexiCubes                   Apache-2.0, but only at the submodule commit
+#                                TRELLIS pins today - see the clone below.
 #
 # Deliberately NOT installed, and asserted absent below:
 #
@@ -34,15 +36,34 @@
 #   The mesh half of TRELLIS's basic dependency list - pymeshfix (GPL-3.0),
 #   python-igraph (GPL-2.0), pyvista, xatlas, trimesh - is also absent.
 #
-#   open3d is the exception, and it is installed. It was excluded with the
-#   others on the reasoning that nothing here extracts a mesh, but
-#   trellis.representations imports it eagerly, so the Gaussian path does not
-#   in fact avoid it - the build proved that, which is what the build is for.
-#   Its licence is MIT, read at source, so it is permissible where the GPL
-#   pair are not.
-#   We never extract a mesh, so none of it is imported: trellis/utils/__init__
-#   is empty and trellis.renderers resolves lazily, so nothing restricted is
-#   reachable from the Gaussian path this worker uses.
+#   plyfile is GPL-3.0-or-later - every release of it, checked across the
+#   whole version history on PyPI, not just the newest. An earlier revision of
+#   this file called it BSD and installed it. It is imported at module scope by
+#   trellis/representations/gaussian/gaussian_model.py, so the Gaussian path
+#   does not avoid it by accident; it is removed deliberately, below.
+#
+#   kaolin is Apache-2.0 overall, but kaolin/__init__.py eagerly imports
+#   kaolin.non_commercial, which is NVIDIA Source Code Licensed - the same
+#   "research or evaluation purposes only" terms as nvdiffrast. FlexiCubes
+#   imports one pure-Python helper from it. Also removed deliberately, below.
+#
+#   open3d IS installed, and is the one member of the mesh half that stays.
+#   trellis/pipelines/__init__.py imports TrellisTextTo3DPipeline eagerly, and
+#   that module imports open3d at module scope, so even the image pipeline
+#   cannot avoid it. Its licence is MIT, read at source, so it is permissible
+#   where the GPL and non-commercial packages are not.
+#
+# WHAT THE GAUSSIAN PATH ACTUALLY REACHES, resolved rather than assumed:
+#
+#   trellis.renderers resolves lazily through __getattr__, so the Inria and
+#   nvdiffrast rasterisers are genuinely unreachable at import. But
+#   trellis/__init__.py imports representations eagerly, representations
+#   imports .mesh eagerly, and TRELLIS-image-large's pipeline.json lists
+#   slat_decoder_mesh, which Pipeline.from_pretrained loads unconditionally.
+#   The mesh *representation* is therefore always imported, whatever
+#   formats=["gaussian"] does at inference time. That is why FlexiCubes must be
+#   present, and why the two restricted imports behind it are patched out
+#   rather than wished away.
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -114,19 +135,159 @@ RUN mkdir -p /models \
 # The dependency list is TRELLIS's own --basic set with the mesh half removed,
 # written out rather than run through setup.sh: setup.sh takes the whole set,
 # and the whole set is where the GPL mesh-repair tools and the optional
-# non-commercial rasterisers come from. plyfile and safetensors are added
+# non-commercial rasterisers come from. safetensors and utils3d are added
 # because the Gaussian representation imports them directly.
-ARG TRELLIS_REF=main
-RUN git clone --depth 1 --branch ${TRELLIS_REF} \
-      https://github.com/microsoft/TRELLIS.git /opt/TRELLIS
+#
+# --recurse-submodules is not optional and its absence is what broke the three
+# builds before this one. FlexiCubes is a git submodule, not a pip package:
+# trellis/representations/mesh/cube2mesh.py does
+# `from .flexicubes.flexicubes import FlexiCubes` at module scope, so without
+# the submodule the import fails with a ModuleNotFoundError naming a *trellis*
+# module, which reads like a missing dependency and is not one. No amount of
+# pip install could ever have fixed it. TRELLIS's own README says to clone this
+# way; this file did not.
+#
+# Pinned to a reviewed commit rather than to main, because the submodule
+# pointer carries licence weight and moves: TRELLIS commit eccd70c,
+# "Update FlexiCubes submodule due to license change", replaced the original
+# nv-tlabs FlexiCubes - NVIDIA Source Code License, "research or evaluation
+# purposes only" - with MaxtirError's Apache-2.0 fork. Building an older ref
+# would silently reintroduce a non-commercial dependency. Moving this ARG
+# forward means re-reading both LICENSE files before shipping.
+ARG TRELLIS_REF=442aa1e1afb9014e80681d3bf604e8d728a86ee7
+#
+# The clone is a partial one - --filter=blob:none with --no-checkout - because
+# --depth 1 --branch cannot resolve a bare commit SHA, and a SHA is the whole
+# point. The exact commits of both repositories are written to
+# /opt/TRELLIS/PROVENANCE before the .git directories are removed, so the image
+# can still say what it is built from without carrying git history or lazily
+# fetching a blob from GitHub at runtime.
+RUN git clone --filter=blob:none --no-checkout \
+      https://github.com/microsoft/TRELLIS.git /opt/TRELLIS \
+ && git -C /opt/TRELLIS checkout --detach ${TRELLIS_REF} \
+ && git -C /opt/TRELLIS submodule update --init --recursive --depth 1 \
+ && test -f /opt/TRELLIS/trellis/representations/mesh/flexicubes/flexicubes.py \
+ && { echo "TRELLIS    $(git -C /opt/TRELLIS rev-parse HEAD)"; \
+      echo "FlexiCubes $(git -C /opt/TRELLIS/trellis/representations/mesh/flexicubes rev-parse HEAD)"; \
+    } > /opt/TRELLIS/PROVENANCE \
+ && find /opt/TRELLIS -name .git -prune -exec rm -rf {} + \
+ && cat /opt/TRELLIS/PROVENANCE
 
+# Every line below was resolved by walking the module-scope import closure of
+# `import trellis` at the pinned commit and then removing one package at a time
+# in a scratch virtualenv until the import broke. Licence for each read at
+# source - the LICENSE file in the project's own repository - not from a
+# summary or a badge:
+#
+#   pillow MIT-CMU.  tqdm MPL-2.0 AND MIT.  scipy, pandas BSD-3-Clause.
+#   opencv-python-headless Apache-2.0.  rembg MIT.  onnxruntime MIT.
+#   transformers Apache-2.0.  safetensors Apache-2.0.  huggingface_hub
+#   Apache-2.0.  spconv Apache-2.0.  numpy BSD-3-Clause.  boto3 Apache-2.0.
+#   runpod MIT.  open3d MIT.  utils3d MIT.
+#
+#   easydict is LGPL-3.0, which is weak copyleft rather than GPL: it is used
+#   unmodified and only through import, so it does not reach the calling work.
+#   It is flagged here because it is the one non-permissive licence that
+#   remains, and because trellis/pipelines/samplers/flow_euler.py imports it at
+#   module scope, so it cannot simply be dropped.
+#
+# imageio, imageio-ffmpeg and a second copy of ninja used to be on this line.
+# None is reachable from `import trellis`, and no file in this worker imports
+# them; ninja is already installed in the gsplat layer above.
 RUN pip install --no-cache-dir \
-      pillow imageio imageio-ffmpeg tqdm easydict scipy ninja \
+      pillow tqdm easydict scipy \
       "opencv-python-headless>=4.10,<5" rembg onnxruntime \
-      "transformers>=4.44" safetensors plyfile huggingface_hub \
-      "spconv-cu120" "numpy<2" boto3 runpod \
+      "transformers>=4.44" safetensors huggingface_hub \
+      "open3d>=0.18" "spconv-cu120" "numpy<2" boto3 runpod \
  && pip install --no-cache-dir \
       "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8"
+
+# --------------------------------------------------------------------------
+# The two module-scope imports that would otherwise drag a GPL-3.0 package and
+# an NVIDIA-Source-Code-Licensed one into a commercially shipped image.
+#
+# Neither is reachable from anything this worker runs:
+#
+#   plyfile  is used only by Gaussian.save_ply and Gaussian.load_ply.
+#            generate.py reads get_xyz / get_scaling / get_rotation /
+#            get_opacity / get_features off the Gaussian and serialises the
+#            splat itself; it never calls either method.
+#   kaolin   supplies one pure-Python shape validator, check_tensor, used only
+#            inside FlexiCubes.__call__ - mesh extraction, which
+#            formats=["gaussian"] never performs.
+#
+# Both are replaced by objects that raise on any use, so this is a boundary
+# that fails loudly rather than a stub that quietly returns something wrong.
+# If either upstream line ever changes, the assertion below fails the build and
+# the dependency gets re-audited instead of being silently reinstated. That is
+# the same guarantee the verification step at the bottom provides, moved to the
+# two places where a restricted package could actually get back in.
+RUN python - <<'PY'
+import pathlib, sys
+
+ABSENT = '''
+
+class _RestrictedDependencyAbsent:
+    """Stands in for a name whose package is barred on licence grounds."""
+
+    def __init__(self, name, package, licence, reason):
+        self._name, self._package = name, package
+        self._licence, self._reason = licence, reason
+
+    def _raise(self, attr):
+        raise NotImplementedError(
+            f"{self._name}.{attr} needs {self._package} ({self._licence}), "
+            f"which is deliberately not installed in this image. {self._reason}"
+        )
+
+    def __getattr__(self, attr):
+        self._raise(attr)
+
+    def __call__(self, *args, **kwargs):
+        self._raise("__call__")
+'''
+
+PATCHES = [
+    (
+        "trellis/representations/gaussian/gaussian_model.py",
+        "from plyfile import PlyData, PlyElement",
+        ABSENT + '''
+_PLY = ("plyfile", "GPL-3.0-or-later",
+        "It is reached only from Gaussian.save_ply/load_ply; this worker reads "
+        "the activated tensors off the Gaussian and never serialises a .ply "
+        "through TRELLIS.")
+PlyData = _RestrictedDependencyAbsent("PlyData", *_PLY)
+PlyElement = _RestrictedDependencyAbsent("PlyElement", *_PLY)
+''',
+    ),
+    (
+        "trellis/representations/mesh/flexicubes/flexicubes.py",
+        "from kaolin.utils.testing import check_tensor",
+        ABSENT + '''
+check_tensor = _RestrictedDependencyAbsent(
+    "check_tensor", "kaolin",
+    "Apache-2.0 overall, but kaolin/__init__.py eagerly imports "
+    "kaolin.non_commercial, which is NVIDIA Source Code Licensed - research "
+    "or evaluation purposes only",
+    "It is reached only from FlexiCubes.__call__, i.e. mesh extraction, which "
+    "formats=['gaussian'] never performs.",
+)
+''',
+    ),
+]
+
+root = pathlib.Path("/opt/TRELLIS")
+for rel, old, new in PATCHES:
+    path = root / rel
+    src = path.read_text()
+    if old not in src:
+        sys.exit(
+            f"licence patch is stale: {rel} no longer contains {old!r}. "
+            "Re-audit that dependency before changing this line."
+        )
+    path.write_text(src.replace(old, new, 1))
+    print(f"removed the restricted import from {rel}")
+PY
 
 RUN python -c "\
 from huggingface_hub import snapshot_download; \
@@ -148,10 +309,16 @@ torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14_reg', pretrained=True)"
 # if any restricted implementation is ever pulled in transitively, this fails
 # the build instead of shipping. The handler's health task reports the same
 # list at runtime.
+#
+# plyfile and kaolin are on this list now. They are not exotic transitive
+# risks: both were reached directly by `import trellis`, and the obvious way to
+# make a future build go green - pip install the module the traceback names -
+# is exactly what this list has to prevent. A build that fails here is working.
 RUN python -c "\
 import importlib.util, sys; \
 restricted = ['diff_gaussian_rasterization', 'diffoctreerast', 'nvdiffrast', \
-              'insightface', 'smplx', 'pymeshfix', 'igraph']; \
+              'insightface', 'smplx', 'pymeshfix', 'igraph', \
+              'plyfile', 'kaolin', 'trimesh', 'xatlas', 'pyvista']; \
 found = [n for n in restricted if importlib.util.find_spec(n)]; \
 sys.exit(f'restricted modules present in a shipped image: {found}') if found else \
 print('no restricted modules present')"
@@ -159,15 +326,56 @@ print('no restricted modules present')"
 # The Gaussian path must import with none of them, which is the claim the
 # licence posture rests on. Checked at build time so a TRELLIS update that
 # moves an import into the hot path is caught here rather than in an audit.
-# open3d, MIT. See the note above: the Gaussian path imports it whether or not
-# a mesh is ever produced.
-RUN pip install --no-cache-dir "open3d>=0.18"
-
+#
+# `import trellis` is kept deliberately, and it is the broadest of the three
+# lines rather than the narrowest. It is not redundant with the two below:
+# trellis/__init__.py imports models, modules, pipelines, renderers,
+# representations and utils, so it is the line that would fail if a TRELLIS
+# update moved a restricted import into any of them. Narrowing this step to
+# just the pipeline would still import the whole package as a side effect of
+# importing a submodule, but it would stop *stating* that as the requirement -
+# and the check exists to state it.
+#
+# The two specific imports stay for the same reason they were written: they
+# name the two objects generate.py actually resolves, so the check fails if
+# either is moved or renamed rather than merely if the package breaks.
 RUN cd /opt/TRELLIS && python -c "\
 import trellis; \
 from trellis.pipelines import TrellisImageTo3DPipeline; \
 from trellis.representations import Gaussian; \
 print('trellis gaussian path imports clean')"
+
+# The import above proves nothing restricted is *needed*. This proves nothing
+# restricted was quietly satisfied by the patch either: the two placeholders
+# must still be placeholders, and must still raise. If a future TRELLIS moves
+# save_ply or check_tensor into the Gaussian path, the worker fails loudly at
+# runtime rather than shipping a licence breach quietly - and this line is what
+# guarantees the placeholder is still the thing standing there.
+WORKDIR /opt/TRELLIS
+RUN python - <<'PY'
+import sys
+import trellis.representations.gaussian.gaussian_model as gm
+from trellis.representations.mesh.flexicubes.flexicubes import check_tensor
+
+# The exact call shapes of the real, never-taken call sites upstream.
+cases = [
+    ("PlyElement.describe", lambda: gm.PlyElement.describe(None, "vertex")),
+    ("PlyData(...)",        lambda: gm.PlyData([None])),
+    ("PlyData.read",        lambda: gm.PlyData.read("/dev/null")),
+    ("check_tensor",        lambda: check_tensor(None, (None, 3), throw=False)),
+]
+for name, call in cases:
+    try:
+        call()
+    except NotImplementedError:
+        print(f"  {name} raises as expected")
+    else:
+        sys.exit(
+            f"licence placeholder for {name} did not raise: a restricted "
+            "package may have been reinstated"
+        )
+print("licence placeholders intact")
+PY
 
 # --------------------------------------------------------------------------
 # The only file of ours in the image, and it does nothing but fetch the rest.
