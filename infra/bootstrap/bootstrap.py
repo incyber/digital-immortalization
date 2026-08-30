@@ -101,15 +101,29 @@ def fetch() -> bytes:
     elif BUNDLE_BUCKET and BUNDLE_KEY:
         log(f"fetching s3://{BUNDLE_BUCKET}/{BUNDLE_KEY}")
         import boto3
+        from botocore.config import Config
 
+        # Explicit timeouts, because the default is effectively none and a
+        # hang here is indistinguishable from a worker that never started.
+        # That is exactly what happened: the breadcrumb said "fetching" and
+        # then nothing, for hours, with no error to read. A failure that
+        # announces itself is worth more than one that waits.
         client = boto3.client(
             "s3",
             endpoint_url=BUNDLE_ENDPOINT or None,
             aws_access_key_id=BUNDLE_ACCESS_KEY or None,
             aws_secret_access_key=BUNDLE_SECRET_KEY or None,
             region_name="auto",
+            config=Config(
+                signature_version="s3v4",
+                connect_timeout=15,
+                read_timeout=60,
+                retries={"max_attempts": 3, "mode": "standard"},
+            ),
         )
+        log(f"client built, requesting {BUNDLE_KEY}")
         data = client.get_object(Bucket=BUNDLE_BUCKET, Key=BUNDLE_KEY)["Body"].read()
+        log(f"received {len(data)} bytes")
     else:
         raise BootstrapError(
             "no bundle source: set BUNDLE_URL, or BUNDLE_BUCKET and BUNDLE_KEY"
