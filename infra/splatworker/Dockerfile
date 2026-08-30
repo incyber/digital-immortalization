@@ -204,8 +204,24 @@ RUN pip install --no-cache-dir \
       "opencv-python-headless>=4.10,<5" rembg onnxruntime \
       "transformers>=4.44" safetensors huggingface_hub \
       "open3d>=0.18" "spconv-cu120" "numpy<2" boto3 runpod \
- && pip install --no-cache-dir \
-      "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8"
+ \
+ # utils3d, with two things that are not optional.
+ #
+ # setuptools first: an older one cannot read this package's [project] table,
+ # falls back to a legacy path, and builds a distribution called UNKNOWN
+ # containing no modules - while reporting success. That is what produced two
+ # identical `No module named utils3d` failures after a pip install that said
+ # it had worked.
+ #
+ # --no-deps second: utils3d declares plyfile, which is GPL-3.0 and is the
+ # package this image goes to some length to keep out. Installing it normally
+ # reinstates it quietly. Verified locally that utils3d imports without it, and
+ # its remaining dependencies are named here instead.
+ && pip install --no-cache-dir --upgrade "setuptools>=70" wheel \
+ && pip install --no-cache-dir moderngl \
+ && pip install --no-cache-dir --no-deps \
+      "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8" \
+ && python -c "import utils3d; print('utils3d importable, not UNKNOWN')"
 
 # --------------------------------------------------------------------------
 # The two module-scope imports that would otherwise drag a GPL-3.0 package and
