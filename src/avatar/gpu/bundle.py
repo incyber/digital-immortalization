@@ -53,10 +53,21 @@ SPLAT_FILES = {
     "generate.py": "infra/splatworker/generate.py",
 }
 
+# A shell on a GPU. Carries the worker's own modules alongside the agent so
+# that a debugging session can import and call the real reconstruct code rather
+# than a copy of it - the whole point is to run what production runs.
+DEBUG_FILES = {
+    "handler.py": "infra/splatworker/agent.py",
+    "reconstruct.py": "infra/splatworker/reconstruct.py",
+    "generate.py": "infra/splatworker/generate.py",
+    "worker.py": "infra/splatworker/handler.py",
+}
+
 BUNDLES = {
     "serverless": SERVERLESS_FILES,
     "musetalk": MUSETALK_FILES,
     "splat": SPLAT_FILES,
+    "debug": DEBUG_FILES,
 }
 
 

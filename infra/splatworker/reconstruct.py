@@ -127,6 +127,21 @@ FRAME_STRIDE_S = 0.5
 # film themselves, and every pixel above it is optimiser time.
 MAX_FRAME_EDGE = 1024
 
+# MediaPipe's canonical face model, and therefore its transformation matrix,
+# is in centimetres. This pipeline is in metres throughout.
+CM_TO_M = 0.01
+
+# What the optimiser is allowed to grow. Both regularisers are dimensionless -
+# the scale one divides by the scene's extent - so that changing the units the
+# scene is measured in cannot quietly change how hard they pull.
+OPACITY_REG = 1e-2
+SCALE_REG = 1e-2
+
+# The longest a single Gaussian may be, as a fraction of the head's extent.
+# Five per cent of a head is about a centimetre, which is larger than any real
+# feature needs and far shorter than the spikes that appear without it.
+MAX_SCALE_FRACTION = 0.05
+
 # The vertical field of view MediaPipe's face geometry solves the facial
 # transformation matrix against. Its perspective camera is fixed at 63 degrees,
 # so the intrinsics we hand gsplat must be built from the same number or the
@@ -521,6 +536,22 @@ def head_poses(images: list, model_path: str = FACE_MODEL_PATH) -> list[HeadPose
                 continue
 
             matrix = np.asarray(result.facial_transformation_matrixes[0], dtype=np.float32)
+            # MediaPipe's canonical face model is measured in centimetres, so
+            # the translation this matrix carries is too - a head sits at about
+            # z=34, not z=0.34. Everything downstream of here is written in
+            # metres: the pose refinement clamps translation to 0.05, the
+            # initial scale comes from the cloud's extent, and the means
+            # learning rate is that extent times a constant borrowed from
+            # published pipelines that work in metres.
+            #
+            # Left unconverted, the scene was a hundred times too large, which
+            # made the learning rate a hundred times too big, which made
+            # gsplat's MCMC noise term large enough to random-walk Gaussians
+            # thousands of units away from the head. The fitted face was
+            # recognisable and surrounded by debris. Converting here, at the
+            # one place the matrix enters the pipeline, keeps every downstream
+            # constant meaning what it says.
+            matrix[:3, 3] *= CM_TO_M
             view = (flip @ matrix).astype(np.float32)
             yaw, pitch = _yaw_pitch(view[:3, :3])
 
@@ -660,6 +691,12 @@ def _head_masks(poses: list[HeadPose], model_path: str = SEGMENTER_MODEL_PATH) -
     try:
         for pose in poses:
             categories = segmenter.segment(_mp_image(pose.image)).category_mask.numpy_view()
+            # MediaPipe returns the category mask with a trailing channel axis
+            # on this build, so the array is (H, W, 1) rather than (H, W).
+            # Squeezed here, at the one place masks are made, because every
+            # consumer downstream unpacks exactly two axes from it.
+            if categories.ndim > 2:
+                categories = categories[..., 0]
             mask = np.isin(categories, HEAD_CLASSES).astype(np.float32)
             masks.append(mask)
     finally:
@@ -1048,8 +1085,16 @@ def optimise(
         loss = (torch.abs(rendered - target) * mask).sum() / mask.sum().clamp(min=1.0)
         # MCMC's own regularisers: without them the strategy relocates dead
         # Gaussians into ever larger blobs and the splat loses its edges.
-        loss = loss + 1e-2 * torch.sigmoid(params["opacities"]).abs().mean()
-        loss = loss + 1e-2 * torch.exp(params["scales"]).abs().mean()
+        #
+        # The scale term is divided by the scene's extent so that it means the
+        # same thing whatever the units are. It was written against a scene
+        # measured in centimetres; correcting that to metres made every scale a
+        # hundred times smaller, which cost the penalty a hundredfold and let
+        # the optimiser grow long thin needles radiating out of the face. A
+        # regulariser whose strength depends on the unit its input happens to
+        # be in is a regulariser that will be switched off by accident.
+        loss = loss + OPACITY_REG * torch.sigmoid(params["opacities"]).abs().mean()
+        loss = loss + SCALE_REG * (torch.exp(params["scales"]) / extent).abs().mean()
         if refining:
             # The rendered view's slice, not the whole tensor. Penalising every
             # view here would give the twenty-nine that were not rendered a
@@ -1064,6 +1109,13 @@ def optimise(
         for optimizer in optimizers.values():
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
+        # No Gaussian may be longer than a fraction of the head. The penalty
+        # above discourages needles; this forbids them. Both are needed: a soft
+        # term trades length against fit, and a single Gaussian that wins that
+        # trade is visible across the whole face as a spike.
+        with torch.no_grad():
+            params["scales"].clamp_(max=math.log(MAX_SCALE_FRACTION * extent))
+
         if refining:
             pose_optimizer.step()
             pose_optimizer.zero_grad(set_to_none=True)
