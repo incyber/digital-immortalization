@@ -118,6 +118,24 @@ def _ship_stdout() -> None:
         def flush(self) -> None:
             self._wrapped.flush()
 
+        # Anything a library reaches for on a real stream, passed straight
+        # through. A tee that answers "no such attribute" to .buffer or
+        # .fileno() would break the very code it is meant to observe.
+        def __getattr__(self, name: str):
+            return getattr(self._wrapped, name)
+
+        # Defined explicitly rather than left to __getattr__: TextIOBase
+        # already provides these and raises from them, so a missing-attribute
+        # hook never sees the call.
+        def fileno(self) -> int:
+            return self._wrapped.fileno()
+
+        def isatty(self) -> bool:
+            return False
+
+        def writable(self) -> bool:
+            return True
+
     sys.stdout = _Tee(sys.stdout)
     sys.stderr = _Tee(sys.stderr)
 
