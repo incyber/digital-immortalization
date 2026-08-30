@@ -51,6 +51,40 @@ the head as the world, that matrix *is* the world-to-camera extrinsic. No
 solver, no bundle adjustment, no COLMAP - and therefore none of COLMAP's
 failure modes on a scene with no camera baseline.
 
+THAT MATRIX IS A PRIOR, NOT A MEASUREMENT
+=========================================
+MediaPipe solves it by fitting a canonical face model under an *assumed*
+perspective camera fixed at MP_VERTICAL_FOV_DEG. It is not a calibration, and
+whoever filmed the clip did not use a 63-degree lens on purpose. Per-frame
+rotation error of a couple of degrees is normal, and at this focal length a
+couple of degrees is tens of pixels of disagreement between two views of the
+same cheekbone.
+
+Gaussian splatting has no way to represent "these two views disagree". Its
+cheapest explanation is to go translucent: a fog that is right on average and
+sharp from nowhere. That is the single most likely way a real capture fails,
+and it is why every photogrammetry pipeline spends bundle adjustment on
+exactly this quantity.
+
+So the poses are not frozen. gsplat's rasteriser is differentiable in
+`viewmats`, so each view carries six extra parameters - an axis-angle rotation
+and a translation, initialised at zero - composed onto the MediaPipe estimate
+and optimised alongside the Gaussians. This is bundle adjustment, reintroduced
+in the only form this pipeline can afford. Three rules keep it a refinement
+rather than a re-solve, and each is enforced rather than hoped for:
+
+  - The MediaPipe estimate stays the anchor. The learned part is a *delta*, so
+    the prior cannot be thrown away, only nudged.
+  - The Gaussians warm up first (POSE_WARMUP_FRACTION). Released together, the
+    poses would absorb error that belongs to geometry the optimiser has not
+    built yet, and the result is a beautifully fitted set of wrong cameras.
+  - The correction is regularised and hard-clamped. A pose that wants to move
+    thirty degrees is not being refined; something else is wrong, and silently
+    accommodating it turns a diagnosable bad capture into an inexplicable bad
+    avatar. The final magnitudes are reported for that reason: small
+    corrections mean MediaPipe was right, large ones mean the capture or the
+    field-of-view assumption was not.
+
 LICENCE
 =======
 gsplat (Nerfstudio) is Apache-2.0 and is an independent implementation. The
@@ -68,10 +102,12 @@ what is missing instead of dying at import.
 
 from __future__ import annotations
 
+import itertools
 import math
 import os
 import struct
-from dataclasses import dataclass, field
+import subprocess
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 # Where the two MediaPipe task bundles live in the image. FACE_MODEL_PATH is
@@ -105,6 +141,82 @@ MP_VERTICAL_FOV_DEG = 63.0
 # estimates when nobody measured it.
 YAW_BINS = 24
 MAX_FRAMES_PER_BIN = 3
+
+# Widest total yaw traverse still described as a frontal shell. Someone talking
+# to a propped phone sweeps perhaps eighty degrees in all, which over YAW_BINS
+# spanning the whole circle is a coverage figure around 0.22 - a number that
+# reads like a failed build to anyone who sees it without a sentence beside it.
+# It is not a failure. It is a complete front and a missing back, which is
+# right for a head-and-shoulders call and wrong for anything that walks around
+# the person, and the notes say which of the two the family is getting.
+FRONTAL_SHELL_MAX_SPAN_DEG = 120.0
+
+# --------------------------------------------------------------------------
+# pose refinement
+#
+# See the module docstring: these six numbers per view are the bundle
+# adjustment this pipeline would otherwise be missing.
+
+# Adam's step is approximately the learning rate whatever the gradient scale,
+# so a learning rate here is a displacement budget per step - and the budget
+# that matters is the one per *view*, because only one view is rendered per
+# iteration. _pose_learning_rates therefore derives them from the run rather
+# than fixing them: a pose may traverse its whole ceiling exactly once over the
+# refining steps its own view receives. Written as a constant instead, the
+# refinement would quietly stop working the day somebody changed
+# Quality.iterations, and it would stop working by producing a slightly
+# blurrier avatar rather than by failing.
+#
+# These are the ceilings on one step, and they exist because a preview build
+# divides its ceiling over very few steps. A pose that can jump a third of a
+# degree on a single noisy image gradient is not being refined, it is being
+# rattled.
+POSE_ROTATION_LR_MAX = 5e-4          # ~0.03 degrees in one step
+POSE_TRANSLATION_LR_MAX = 5e-4       # 0.5mm in one step
+
+# Fraction of the run the Gaussians get to themselves. Releasing both at once
+# lets the poses absorb error that belongs to geometry that does not exist yet.
+POSE_WARMUP_FRACTION = 0.3
+
+# Hard ceiling on one view's correction, applied by projection after every
+# step. The regulariser below discourages a large correction; this makes it
+# impossible, so a single badly landmarked frame cannot drag its camera into
+# the next county and take the reconstruction with it.
+MAX_POSE_ROTATION_DEG = 10.0
+MAX_POSE_TRANSLATION_M = 0.05
+
+# Weight on the correction penalty. The penalty is expressed as a fraction of
+# the ceilings above and therefore dimensionless, which is what lets one weight
+# cover both rotation and translation. At 1e-2 it matches the opacity and scale
+# regularisers already in the loss: negligible for the small corrections that
+# are the point, decisive against a pose trying to run away.
+POSE_REGULARISATION = 1e-2
+
+# Above this the correction has stopped being a refinement of a good prior.
+# Reported rather than acted on: the build still finishes, but the reason it
+# looks the way it does is in the notes instead of in nobody's head.
+SUSPECT_POSE_CORRECTION_DEG = 4.0
+
+# --------------------------------------------------------------------------
+# audio
+
+# Sample rate the loudness envelope is measured at. Speech energy is a
+# low-resolution quantity here - one number per half-second frame - so
+# telephone rate is more than enough and keeps a sixty-second clip under 2MB.
+AUDIO_SAMPLE_RATE = 16_000
+
+# Seconds ffmpeg gets to decode the audio before the envelope is abandoned and
+# the selection falls back to blendshapes alone. Audio is an improvement to
+# frame choice, never a dependency of it.
+AUDIO_TIMEOUT_S = 120.0
+
+# How much a frame's loudness counts against it when choosing which frame in a
+# yaw bin to keep, relative to its blendshape score. Both are in [0, 1]. Equal
+# weighting on purpose: the blendshapes say the mouth is open *now*, the audio
+# says the person is mid-sentence, and the second is the better predictor of
+# the first because a closed mouth between two words is still a mouth about to
+# move and still a frame whose lips disagree with every other frame.
+SPEECH_WEIGHT = 1.0
 
 # Blendshapes that mean "this frame is not the face at rest". Scored rather
 # than thresholded: a person who talks continuously has no neutral frame, and
@@ -140,6 +252,31 @@ class ReconstructError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class PoseCorrection:
+    """How far the optimiser had to move the cameras away from MediaPipe's.
+
+    Diagnostic, and the only honest way to answer "why does this one look
+    wrong". A mean under a degree says the facial transformation matrices were
+    good and the reconstruction can be believed. Several degrees says the
+    prior was poor, which on this route means one of two things and both are
+    fixable: the capture was bad, or the phone's lens is nothing like the
+    63-degree camera MediaPipe assumed when it solved the pose.
+
+    Zero on the generated route, which has no MediaPipe prior to correct.
+    """
+
+    mean_deg: float = 0.0
+    max_deg: float = 0.0
+    mean_mm: float = 0.0
+    max_mm: float = 0.0
+    views: int = 0
+
+    @property
+    def suspect(self) -> bool:
+        return self.mean_deg >= SUSPECT_POSE_CORRECTION_DEG
+
+
+@dataclass(frozen=True)
 class GaussianCloud:
     """The artefact both routes produce, before it is a file.
 
@@ -166,6 +303,13 @@ class GaussianCloud:
     angular_coverage: float
     views_used: int
     notes: tuple[str, ...] = field(default_factory=tuple)
+    # Total yaw the head actually traversed, in degrees. Carried beside
+    # angular_coverage because the fraction alone cannot distinguish "the head
+    # barely moved" from "the head moved a lot and the circle is just big".
+    yaw_span_deg: float = 0.0
+    # What the pose refinement had to do. Defaulted so the generated route,
+    # which has no per-frame prior to refine, constructs unchanged.
+    pose_correction: PoseCorrection = field(default_factory=PoseCorrection)
 
     @property
     def count(self) -> int:
@@ -194,6 +338,10 @@ class HeadPose:
     # 0 is the face at rest, 1 is mid-word or mid-blink. Used to choose the
     # frames a rigid model can actually explain.
     expression: float
+    # How loud the person was around this frame, normalised to [0, 1] across
+    # the clip. 0 when the video has no audio track, which makes a clip with no
+    # sound behave exactly as it did before this was measured.
+    speech: float = 0.0
 
 
 # --------------------------------------------------------------------------
@@ -232,6 +380,71 @@ def _frames(video: Path, stride_s: float = FRAME_STRIDE_S) -> list:
     if not out:
         raise ReconstructError("the video contained no readable frames")
     return out
+
+
+# --------------------------------------------------------------------------
+# audio: which frames the person was not talking through
+
+
+def _decode_audio(video: Path) -> bytes:
+    """Raw mono 16-bit PCM for the whole clip, or empty if there is none.
+
+    One ffmpeg pass, straight to stdout, no intermediate file. Returns empty
+    rather than raising for every reason it can fail - no audio track, no
+    ffmpeg on this machine, a container ffmpeg will not open - because a
+    loudness envelope is an improvement to frame selection and never a
+    prerequisite for it. A clip that arrives silent must still reconstruct.
+    """
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(video), "-vn",
+             "-ac", "1", "-ar", str(AUDIO_SAMPLE_RATE), "-f", "s16le", "-"],
+            capture_output=True, timeout=AUDIO_TIMEOUT_S, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return b""
+    return result.stdout if result.returncode == 0 else b""
+
+
+def _speech_envelope(video: Path, frame_count: int, stride_s: float = FRAME_STRIDE_S):
+    """One loudness value per sampled frame, in [0, 1], or None if unmeasurable.
+
+    The calmest frame of continuous speech is still a mouth mid-phoneme, so
+    ranking frames by blendshapes alone reliably picks the least-open mouth of
+    a face that never stopped moving: a sharp forehead over a smeared jaw. The
+    audio says which seconds the person was not speaking at all, and those are
+    the frames whose lips agree with each other.
+
+    Normalised against the loudest window rather than an absolute threshold,
+    because the input is a phone microphone at an unknown distance and the only
+    meaningful question here is which parts of *this* clip are its quiet ones.
+    """
+    import numpy as np
+
+    pcm = _decode_audio(video)
+    if len(pcm) < 2:
+        return None
+
+    # int16 from ffmpeg's s16le; an odd trailing byte is a truncated sample.
+    samples = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype="<i2").astype(np.float32)
+    samples /= 32768.0
+
+    window = max(1, round(AUDIO_SAMPLE_RATE * stride_s))
+    envelope = np.zeros(frame_count, dtype=np.float32)
+    for index in range(frame_count):
+        # The window is centred on the frame's timestamp: a frame is smeared by
+        # the word on either side of it, not only by the one that follows.
+        centre = round(index * stride_s * AUDIO_SAMPLE_RATE)
+        chunk = samples[max(0, centre - window // 2): centre + window // 2]
+        if chunk.size:
+            envelope[index] = float(np.sqrt(np.mean(chunk * chunk)))
+
+    loudest = float(envelope.max())
+    if loudest <= 0.0:
+        # A track that exists and is digital silence carries no information
+        # about which frames are quiet, so it is not allowed to pretend it does.
+        return None
+    return (envelope / loudest).tolist()
 
 
 # --------------------------------------------------------------------------
@@ -329,6 +542,17 @@ def head_poses(images: list, model_path: str = FACE_MODEL_PATH) -> list[HeadPose
     return poses
 
 
+def _speaking_cost(pose: HeadPose) -> float:
+    """How badly one frame breaks the rigid assumption, from both witnesses.
+
+    The blendshapes see the mouth in this frame; the audio hears whether the
+    person was in the middle of a sentence around it. They disagree usefully:
+    the quietest instant between two words scores near zero on blendshapes and
+    is still a frame whose lips are shaped for the word on either side of it.
+    """
+    return float(pose.expression) + SPEECH_WEIGHT * float(pose.speech)
+
+
 def _rigid_spread(poses: list[HeadPose]) -> list[HeadPose]:
     """The calmest frames, spread across the angles the head actually reached.
 
@@ -337,6 +561,10 @@ def _rigid_spread(poses: list[HeadPose]) -> list[HeadPose]:
     to be facing when they stopped talking; taking an even spread of angles
     admits mid-word frames that a rigid model cannot explain. So: bucket by
     yaw, then keep the calmest few in each bucket.
+
+    "Calmest" is _speaking_cost rather than the blendshape score alone, so a
+    clip with an audio track prefers frames from its quiet seconds. Without
+    one, pose.speech is zero throughout and this is the ordering it always was.
     """
     if not poses:
         return []
@@ -350,7 +578,7 @@ def _rigid_spread(poses: list[HeadPose]) -> list[HeadPose]:
 
     kept: list[HeadPose] = []
     for members in bins.values():
-        members.sort(key=lambda p: p.expression)
+        members.sort(key=_speaking_cost)
         kept.extend(members[:MAX_FRAMES_PER_BIN])
     kept.sort(key=lambda p: p.index)
     return kept
@@ -370,6 +598,30 @@ def _coverage(poses: list[HeadPose]) -> float:
         for p in poses
     }
     return round(min(1.0, len(filled) / YAW_BINS), 2)
+
+
+def _yaw_span_degrees(poses: list[HeadPose]) -> float:
+    """The total arc of yaw the views occupy, in degrees.
+
+    The companion to _coverage, and the reason a low coverage figure can be
+    explained instead of merely reported. Coverage says what fraction of the
+    circle was seen; this says how wide the seen part is, which is the number a
+    person can picture. Ninety degrees is "they turned their head"; fifteen is
+    "they looked at the phone and did not move".
+
+    Computed as the smallest arc containing every view - the circle minus the
+    largest gap between consecutive yaws - so a clip that happens to straddle
+    the wrap at pi is not reported as having swept the whole way round.
+    """
+    if not poses:
+        return 0.0
+    if len(poses) == 1:
+        return 0.0
+
+    angles = sorted((p.yaw + 2 * math.pi) % (2 * math.pi) for p in poses)
+    gaps = [b - a for a, b in itertools.pairwise(angles)]
+    gaps.append(angles[0] + 2 * math.pi - angles[-1])
+    return round(math.degrees(2 * math.pi - max(gaps)), 1)
 
 
 # --------------------------------------------------------------------------
@@ -497,6 +749,179 @@ def _intrinsics(height: int, width: int):
     )
 
 
+# --------------------------------------------------------------------------
+# pose refinement: the bundle adjustment this pipeline would otherwise skip
+
+
+def _axis_angle_to_rotation(omega):
+    """(V, 3) axis-angle to (V, 3, 3) rotation, differentiably.
+
+    Rodrigues' formula, written so it survives being evaluated at exactly zero
+    - which is where every one of these parameters starts. The naive form
+    divides by the rotation angle and returns NaN on the first forward pass,
+    and a NaN here does not announce itself: it propagates into the extrinsics,
+    the render comes out blank, the loss is finite, and the build completes
+    having learned nothing.
+    """
+    import torch
+
+    theta_sq = (omega * omega).sum(-1, keepdim=True)
+    # The epsilon is inside the square root rather than a clamp outside it so
+    # the derivative at zero is finite as well as the value.
+    theta = torch.sqrt(theta_sq + 1e-12)
+    sin_term = (torch.sin(theta) / theta).unsqueeze(-1)
+    cos_term = ((1.0 - torch.cos(theta)) / theta_sq.clamp(min=1e-12)).unsqueeze(-1)
+
+    zero = torch.zeros_like(omega[..., 0])
+    wx, wy, wz = omega[..., 0], omega[..., 1], omega[..., 2]
+    skew = torch.stack([
+        torch.stack([zero, -wz, wy], dim=-1),
+        torch.stack([wz, zero, -wx], dim=-1),
+        torch.stack([-wy, wx, zero], dim=-1),
+    ], dim=-2)
+
+    eye = torch.eye(3, dtype=omega.dtype, device=omega.device).expand(skew.shape)
+    # At omega = 0 the skew matrix is exactly zero, so this is exactly the
+    # identity: the first iteration of a run with a perfect prior changes
+    # nothing, which is the property that makes the prior an anchor.
+    return eye + sin_term * skew + cos_term * (skew @ skew)
+
+
+def _corrected_views(views, rotation_delta, translation_delta):
+    """MediaPipe's extrinsics with a learned SE(3) correction applied.
+
+    Left-multiplied rather than re-parameterised. Composing on this side means
+    the correction acts in the camera's own frame, so `rotation_delta` is
+    literally how far this view's camera was turned from where MediaPipe put
+    it and `translation_delta` is literally how far it was moved - radians and
+    metres, per view, directly reportable. Solving for the pose outright would
+    read the same at convergence and would have discarded the prior that is the
+    only reason this route needs no solver.
+    """
+    import torch
+
+    delta = _axis_angle_to_rotation(rotation_delta)
+    rotation = delta @ views[:, :3, :3]
+    translation = (delta @ views[:, :3, 3:4]).squeeze(-1) + translation_delta
+    top = torch.cat([rotation, translation.unsqueeze(-1)], dim=-1)
+    # The prior's own bottom row, so the result keeps its dtype and device and
+    # is a homogeneous matrix by construction rather than by assembly.
+    return torch.cat([top, views[:, 3:4, :]], dim=-2)
+
+
+def _pose_regulariser(rotation_delta, translation_delta):
+    """What it costs to disagree with MediaPipe.
+
+    Each correction is measured as a fraction of its hard ceiling and squared,
+    which makes the two terms dimensionless and comparable and lets one weight
+    govern both. Squared magnitude rather than magnitude on purpose: the
+    gradient of a vector norm at zero is undefined, and zero is where these
+    parameters live for the whole warmup.
+    """
+    rotation = (rotation_delta * rotation_delta).sum(-1) / math.radians(
+        MAX_POSE_ROTATION_DEG
+    ) ** 2
+    translation = (translation_delta * translation_delta).sum(-1) / (
+        MAX_POSE_TRANSLATION_M ** 2
+    )
+    return POSE_REGULARISATION * (rotation.mean() + translation.mean())
+
+
+def _clamp_pose_correction(rotation_delta, translation_delta) -> None:
+    """Project every correction back inside its ceiling, in place.
+
+    The regulariser makes a large correction expensive; this makes it
+    impossible. The difference matters because the failure it guards against is
+    not gradual: one frame the landmarker got badly wrong produces a residual
+    no amount of Gaussian can explain, the cheapest remaining explanation is to
+    move that camera somewhere else entirely, and a camera that has left the
+    scene takes its share of the Gaussians with it.
+    """
+    import torch
+
+    with torch.no_grad():
+        for tensor, limit in (
+            (rotation_delta, math.radians(MAX_POSE_ROTATION_DEG)),
+            (translation_delta, MAX_POSE_TRANSLATION_M),
+        ):
+            norm = torch.linalg.norm(tensor, dim=-1, keepdim=True)
+            tensor.mul_((limit / norm.clamp(min=1e-12)).clamp(max=1.0))
+
+
+def _pose_learning_rates(iterations: int, views: int, warmup: int) -> tuple[float, float]:
+    """How fast a camera may move, derived from how often it is looked at.
+
+    One view is rendered per iteration, so a pose is stepped roughly
+    (iterations - warmup) / views times in the whole run and no more. Sizing
+    the learning rate as "the ceiling, divided over the steps this view will
+    actually receive" makes the correction able to reach the error it exists to
+    fix on a long build and on a short one, without either becoming a number
+    that has to be re-tuned by hand whenever Quality.iterations changes.
+
+    Capped, because a preview build divides the same ceiling over a tenth of
+    the steps and the result would be a pose that lurches a third of a degree
+    on one noisy image gradient. A preview that refines less is the right
+    trade; a preview that shakes its cameras is not.
+    """
+    steps = max(1, (int(iterations) - int(warmup)) // max(1, int(views)))
+    return (
+        min(POSE_ROTATION_LR_MAX, math.radians(MAX_POSE_ROTATION_DEG) / steps),
+        min(POSE_TRANSLATION_LR_MAX, MAX_POSE_TRANSLATION_M / steps),
+    )
+
+
+def _pose_optimiser(rotation_delta, translation_delta, rotation_lr, translation_lr):
+    """Adam over the pose corrections, with the momentum deliberately removed.
+
+    One view is rendered per step, so on any given step every *other* view's
+    gradient is exactly zero. Adam does not stand still on a zero gradient: it
+    keeps spending the momentum left over from the last step that did move,
+    decayed by beta1 each time. With thirty views that is roughly nine extra
+    steps of the last real direction before a view is next rendered, so each
+    pose moves about ten times as far as its learning rate says it does - and
+    the learning rate here is chosen precisely as a displacement budget.
+
+    beta1 = 0 makes the first moment the current gradient, so a view that was
+    not rendered does not move. The second moment is kept, because that is what
+    makes the step size independent of how large the image gradients happen to
+    be and therefore comparable between a bright clip and a dim one.
+
+    beta2 = 0.9 rather than the usual 0.999 for the same reason the learning
+    rate is derived rather than fixed: a pose gets only a few hundred steps, and
+    a second moment that remembers a thousand of them is still normalising by
+    the large gradients of the first iteration long after the pose has stopped
+    being wrong. The effective step decays towards nothing and the refinement
+    stalls part-way. Measured on the toy capture in the tests, over the 350
+    steps a standard build gives one view, this is the difference between
+    taking three degrees of pose error down to 1.6 and taking it down to 0.2.
+    """
+    import torch
+
+    return torch.optim.Adam(
+        [
+            {"params": [rotation_delta], "lr": rotation_lr},
+            {"params": [translation_delta], "lr": translation_lr},
+        ],
+        betas=(0.0, 0.9),
+    )
+
+
+def _pose_correction_report(rotation_delta, translation_delta) -> PoseCorrection:
+    """The magnitudes, off the card, in units a support agent can read."""
+    import torch
+
+    with torch.no_grad():
+        degrees = torch.rad2deg(torch.linalg.norm(rotation_delta, dim=-1))
+        millimetres = torch.linalg.norm(translation_delta, dim=-1) * 1000.0
+        return PoseCorrection(
+            mean_deg=round(float(degrees.mean()), 3),
+            max_deg=round(float(degrees.max()), 3),
+            mean_mm=round(float(millimetres.mean()), 2),
+            max_mm=round(float(millimetres.max()), 2),
+            views=int(rotation_delta.shape[0]),
+        )
+
+
 def optimise(
     poses: list[HeadPose],
     masks: list,
@@ -564,18 +989,50 @@ def optimise(
         "sh0": torch.optim.Adam([params["sh0"]], lr=2.5e-3),
     }
 
+    # The six per-view parameters that turn MediaPipe's estimate from a
+    # measurement into a prior. Deliberately *not* in `params` and *not* in
+    # `optimizers`: MCMCStrategy walks both, and every tensor it finds there it
+    # assumes is one row per Gaussian, to be relocated and duplicated with the
+    # cloud. A (views, 3) tensor in that dict is a silent corruption of the
+    # strategy's bookkeeping the first time it densifies.
+    rotation_delta = torch.nn.Parameter(torch.zeros(len(poses), 3, device=device))
+    translation_delta = torch.nn.Parameter(torch.zeros(len(poses), 3, device=device))
+    # Floored at one pass over the views, not just at a fraction of the run. A
+    # camera released before its own frame has ever been rendered would take
+    # its first step against a cloud that is still the seed points, and a short
+    # run - a smoke test, a tiny preview - would otherwise round the warmup
+    # away entirely and refine poses that have nothing to be refined against.
+    warmup = max(len(poses), int(int(iterations) * POSE_WARMUP_FRACTION))
+    pose_optimizer = _pose_optimiser(
+        rotation_delta, translation_delta,
+        *_pose_learning_rates(iterations, len(poses), warmup),
+    )
+
     strategy = MCMCStrategy(cap_max=int(gaussian_budget), verbose=False)
     state = strategy.initialize_state()
 
     for step in range(int(iterations)):
         pick = step % len(poses)
+        # Frozen for the warmup, and frozen by *exclusion from the graph*
+        # rather than by a zeroed gradient, so nothing accumulates in Adam's
+        # moments that would be spent the instant the poses are released.
+        refining = step >= warmup
+        viewmats = (
+            _corrected_views(
+                views[pick: pick + 1],
+                rotation_delta[pick: pick + 1],
+                translation_delta[pick: pick + 1],
+            )
+            if refining
+            else views[pick: pick + 1]
+        )
         rendered, _, info = rasterization(
             means=params["means"],
             quats=params["quats"],
             scales=torch.exp(params["scales"]),
             opacities=torch.sigmoid(params["opacities"]),
             colors=params["sh0"],
-            viewmats=views[pick: pick + 1],
+            viewmats=viewmats,
             Ks=k,
             width=width,
             height=height,
@@ -593,20 +1050,37 @@ def optimise(
         # Gaussians into ever larger blobs and the splat loses its edges.
         loss = loss + 1e-2 * torch.sigmoid(params["opacities"]).abs().mean()
         loss = loss + 1e-2 * torch.exp(params["scales"]).abs().mean()
+        if refining:
+            # The rendered view's slice, not the whole tensor. Penalising every
+            # view here would give the twenty-nine that were not rendered a
+            # non-zero gradient, and they would drift on a step that saw no
+            # evidence about them at all - which is exactly the behaviour
+            # _pose_optimiser removes the momentum to prevent.
+            loss = loss + _pose_regulariser(
+                rotation_delta[pick: pick + 1], translation_delta[pick: pick + 1]
+            )
 
         loss.backward()
         for optimizer in optimizers.values():
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
+        if refining:
+            pose_optimizer.step()
+            pose_optimizer.zero_grad(set_to_none=True)
+            _clamp_pose_correction(rotation_delta, translation_delta)
         strategy.step_post_backward(
             params, optimizers, state, step, info,
             lr=optimizers["means"].param_groups[0]["lr"],
         )
 
-    return _cloud_from(params, poses)
+    return _cloud_from(
+        params, poses, _pose_correction_report(rotation_delta, translation_delta)
+    )
 
 
-def _cloud_from(params, poses: list[HeadPose]) -> GaussianCloud:
+def _cloud_from(
+    params, poses: list[HeadPose], correction: PoseCorrection | None = None
+) -> GaussianCloud:
     """Activated parameters, off the card, in the shape the exporter wants."""
     import torch
 
@@ -621,6 +1095,8 @@ def _cloud_from(params, poses: list[HeadPose]) -> GaussianCloud:
             opacities=torch.sigmoid(params["opacities"]).detach().cpu().numpy(),
             angular_coverage=_coverage(poses),
             views_used=len(poses),
+            yaw_span_deg=_yaw_span_degrees(poses),
+            pose_correction=correction or PoseCorrection(),
         )
 
 
@@ -690,8 +1166,17 @@ def reconstruct(
     whenever it is open, and it is what lets the quality report say the
     likeness is measured without qualifying it.
     """
-    images = _frames(Path(video))
+    video = Path(video)
+    images = _frames(video)
     poses = head_poses(images)
+
+    # Attached after landmarking rather than before, so a clip whose audio
+    # cannot be decoded costs nothing: the poses are already correct and every
+    # speech value simply stays at zero.
+    envelope = _speech_envelope(video, len(images))
+    if envelope is not None:
+        poses = [replace(p, speech=envelope[p.index]) for p in poses]
+
     if len(poses) < MIN_USABLE_VIEWS:
         raise ReconstructError(
             f"a face was found in only {len(poses)} sampled frames, and "
@@ -704,7 +1189,7 @@ def reconstruct(
         # Reached when someone talks continuously: every frame is non-rigid, so
         # the spread filter has nothing calm to choose. Building from the
         # calmest available beats refusing a clip the router already accepted.
-        kept = sorted(poses, key=lambda p: p.expression)[: max(MIN_USABLE_VIEWS, YAW_BINS)]
+        kept = sorted(poses, key=_speaking_cost)[: max(MIN_USABLE_VIEWS, YAW_BINS)]
         kept.sort(key=lambda p: p.index)
 
     masks = _head_masks(kept)
@@ -713,17 +1198,63 @@ def reconstruct(
         iterations=iterations, gaussian_budget=gaussian_budget, device=device,
     )
 
-    notes = []
+    return replace(cloud, notes=_notes(poses, kept, cloud, heard=envelope is not None))
+
+
+def _notes(
+    poses: list[HeadPose], kept: list[HeadPose], cloud: GaussianCloud, *, heard: bool
+) -> tuple[str, ...]:
+    """What a support agent would need to explain this build to the family.
+
+    Every line here answers a question somebody will eventually ask about an
+    avatar that did not come out the way they hoped, and answers it with a
+    measured number rather than a guess.
+    """
+    notes: list[str] = []
+
     dropped = len(poses) - len(kept)
     if dropped:
         notes.append(f"{dropped} frames were mid-word or mid-blink and were not used")
-    if cloud.angular_coverage < 0.5:
-        notes.append("the head turned through less than half of the way round")
+    if not heard:
+        notes.append(
+            "the clip carried no usable audio, so mid-word frames were recognised "
+            "from the face alone and some will have been kept"
+        )
 
-    return GaussianCloud(
-        means=cloud.means, scales=cloud.scales, quats=cloud.quats,
-        colors=cloud.colors, opacities=cloud.opacities,
-        angular_coverage=cloud.angular_coverage,
-        views_used=cloud.views_used,
-        notes=tuple(notes),
+    span = cloud.yaw_span_deg
+    if span <= FRONTAL_SHELL_MAX_SPAN_DEG:
+        # Stated as a shape rather than as a shortfall. A coverage of 0.22 is
+        # what someone talking to a propped phone produces even when they did
+        # everything right, and a number that reads like a failure next to no
+        # sentence at all is how a good build gets thrown away.
+        notes.append(
+            f"the head turned through {span:.0f} degrees in total, so this is a "
+            f"frontal shell: complete from the front and from the {span / 2:.0f} "
+            "degrees to either side that the camera reached, and unreconstructed "
+            f"behind the ears. The angular coverage of {cloud.angular_coverage} "
+            "measures that shape and is not a fault"
+        )
+    else:
+        notes.append(
+            f"the head turned through {span:.0f} degrees, wide enough to be seen "
+            "from the side as well as the front"
+        )
+
+    correction = cloud.pose_correction
+    notes.append(
+        f"the camera poses were refined by {correction.mean_deg:.2f} degrees on "
+        f"average and {correction.max_deg:.2f} at most, and by "
+        f"{correction.mean_mm:.1f}mm on average"
     )
+    if correction.suspect:
+        # The diagnostic that turns an inexplicable avatar into a fixable
+        # capture. Large corrections mean the prior was wrong, and on this
+        # route there are only two ways for the prior to be wrong.
+        notes.append(
+            f"that is a large correction: MediaPipe's poses disagreed with the "
+            f"frames by more than {SUSPECT_POSE_CORRECTION_DEG:.0f} degrees on "
+            "average, which points at the capture itself or at a lens far from "
+            f"the {MP_VERTICAL_FOV_DEG:.0f}-degree camera the pose solver assumes"
+        )
+
+    return tuple(notes)

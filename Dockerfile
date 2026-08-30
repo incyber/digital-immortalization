@@ -32,10 +32,25 @@ ARG STT_MODEL=small
 RUN python -c "\
 from faster_whisper import WhisperModel; WhisperModel('${STT_MODEL}', device='cpu', compute_type='int8')"
 
-# The voice, likewise.
+# The voices, likewise.
+#
+# One per supported language, and exactly the identifiers in
+# services/voices.py - the voice follows the avatar's language, so a voice
+# that is present for one locale and missing for another is a call that ends
+# in a 500 the moment somebody speaks. The previous single en_GB-alba-medium
+# was reachable from no locale at all: nothing in VOICES names it.
 RUN mkdir -p /voices && cd /voices \
- && curl -sSL -O "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx" \
- && curl -sSL -O "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json"
+ && for v in \
+      en/en_US/hfc_female/medium/en_US-hfc_female-medium \
+      es/es_ES/davefx/medium/es_ES-davefx-medium \
+      pt/pt_BR/faber/medium/pt_BR-faber-medium \
+      fr/fr_FR/siwis/medium/fr_FR-siwis-medium \
+      de/de_DE/thorsten/medium/de_DE-thorsten-medium \
+      it/it_IT/riccardo/x_low/it_IT-riccardo-x_low \
+    ; do \
+      curl -fsSL -O "https://huggingface.co/rhasspy/piper-voices/resolve/main/$v.onnx" \
+   && curl -fsSL -O "https://huggingface.co/rhasspy/piper-voices/resolve/main/$v.onnx.json" ; \
+    done
 
 COPY infra/piper/server.py /opt/piper/server.py
 RUN pip install --no-cache-dir piper-tts
@@ -54,7 +69,18 @@ ENV ASSETS_DIR=/app/assets \
     STT_MODEL=small \
     RENDERER_BACKEND=viseme \
     COOKIES_SECURE=true \
-    PIPER_VOICE=/voices/en_GB-alba-medium.onnx
+    PIPER_PORT=7002 \
+    PIPER_VOICES_DIR=/voices \
+    PIPER_VOICE=en_US-hfc_female-medium
+
+# PIPER_PORT is set because infra/piper/server.py defaults to 5050 while
+# TTS_URL above and the entrypoint's health probe both say 7002. Unset, the
+# gateway talks to a port nothing is listening on and every call is silent.
+#
+# PIPER_VOICE is a voice *name*: the server joins it to PIPER_VOICES_DIR and
+# appends .onnx. A full path here resolved to /voices//voices/....onnx.onnx.
+# It is only the fallback for a request that names no voice; the application
+# always names one.
 
 EXPOSE 8000
 CMD ["/entrypoint.sh"]

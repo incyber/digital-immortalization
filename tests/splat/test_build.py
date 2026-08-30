@@ -17,6 +17,7 @@ import dataclasses
 import pytest
 
 from avatar.gpu.serverless import DEFAULT_EXECUTION_TIMEOUT_S, JobResult, JobState
+from avatar.splat import build as splat_build
 from avatar.splat.build import (
     BYTES_PER_GAUSSIAN,
     MAX_MEASURED_ON_GENERATION,
@@ -558,3 +559,155 @@ async def test_a_bigger_quality_target_costs_more_and_downloads_larger():
     high = await builder.build(video_intake(), AVATAR, quality=Quality.HIGH)
     assert high.size_bytes > preview.size_bytes
     assert high.cost_usd > preview.cost_usd
+
+
+# --- one endpoint per route -------------------------------------------------
+
+
+class _Endpoint:
+    """One RunPod endpoint, remembering what was sent to it."""
+
+    def __init__(self, recorder: "EndpointRecorder", endpoint_id: str):
+        self._recorder = recorder
+        self._endpoint = endpoint_id
+
+    def submit(self, payload: dict) -> str:
+        self._recorder.submitted.append((self._endpoint, payload))
+        return "runpod-000001"
+
+    def status(self, job_id: str) -> JobResult:
+        return JobResult(id=job_id, state=JobState.COMPLETED, execution_ms=1_000)
+
+    def cancel(self, job_id: str) -> None:
+        self._recorder.cancelled.append((self._endpoint, job_id))
+
+
+class EndpointRecorder:
+    """Stands in for ServerlessClient and remembers which endpoint got what.
+
+    Patched over the class the backend constructs rather than injected as a
+    client, because the wiring itself is what these tests defend: a single
+    injected client answers every route and would prove nothing about which
+    endpoint a job actually went to.
+    """
+
+    def __init__(self):
+        self.built: list[str] = []
+        self.submitted: list[tuple[str, dict]] = []
+        self.cancelled: list[tuple[str, str]] = []
+
+    def __call__(self, api_key: str, endpoint_id: str) -> _Endpoint:
+        self.built.append(endpoint_id)
+        return _Endpoint(self, endpoint_id)
+
+    @property
+    def endpoints_submitted_to(self) -> list[str]:
+        return [endpoint for endpoint, _ in self.submitted]
+
+
+@pytest.fixture
+def endpoints(monkeypatch):
+    recorder = EndpointRecorder()
+    monkeypatch.setattr(splat_build, "ServerlessClient", recorder)
+    return recorder
+
+
+async def test_a_video_build_is_submitted_to_the_reconstruct_endpoint(endpoints):
+    backend = RunPodSplatBackend("key", "reconstruct-endpoint", "generate-endpoint")
+    job = plan(video_intake(), AVATAR)
+    assert job.route is Route.RECONSTRUCT
+
+    await backend.submit(job)
+
+    assert endpoints.endpoints_submitted_to == ["reconstruct-endpoint"]
+
+
+async def test_a_photographs_only_build_is_submitted_to_the_generate_endpoint(endpoints):
+    """The two routes are two worker images, and a payload is not portable.
+
+    Written now, while only one of those images exists, so the day the second
+    one builds the only change is a configured endpoint id.
+    """
+    backend = RunPodSplatBackend("key", "reconstruct-endpoint", "generate-endpoint")
+    job = plan(photo_intake(), AVATAR)
+    assert job.route is Route.GENERATE
+
+    await backend.submit(job)
+
+    assert endpoints.endpoints_submitted_to == ["generate-endpoint"]
+
+
+async def test_a_cancel_goes_back_to_the_endpoint_that_is_running_the_build(endpoints):
+    """A cancel sent to the other endpoint is a cancel that does not happen."""
+    backend = RunPodSplatBackend("key", "reconstruct-endpoint", "generate-endpoint")
+    external_id = await backend.submit(plan(photo_intake(), AVATAR))
+
+    await backend.cancel(external_id)
+
+    assert endpoints.cancelled == [("generate-endpoint", external_id)]
+
+
+async def test_a_route_with_no_endpoint_configured_never_reaches_the_provider(endpoints):
+    backend = RunPodSplatBackend("key", "reconstruct-endpoint", "")
+    builder = SplatBuilder(backend)
+
+    with pytest.raises(SplatRefused):
+        await builder.build(photo_intake(), AVATAR)
+
+    assert endpoints.built == [], "a route we cannot build must not open a client"
+    assert endpoints.submitted == [], "and must cost no GPU second"
+    assert builder.pending == (), "and must leave nothing waiting"
+
+
+async def test_a_route_we_have_not_shipped_is_admitted_as_our_limit(endpoints):
+    """The customer did nothing wrong, and the sentence must not imply they did."""
+    builder = SplatBuilder(RunPodSplatBackend("key", "reconstruct-endpoint", ""))
+
+    with pytest.raises(SplatRefused) as refusal:
+        await builder.build(photo_intake(), AVATAR)
+
+    reasoning = refusal.value.decision.reasoning
+    assert "only build a likeness from video at the moment" in reasoning
+    assert "a route we have not finished yet" in reasoning
+    assert "rather than anything wrong with the photographs you sent" in reasoning
+
+
+async def test_a_route_we_have_not_shipped_still_names_a_next_step(endpoints):
+    """A refusal that offers nothing to do is a dead end even when it is honest."""
+    builder = SplatBuilder(RunPodSplatBackend("key", "reconstruct-endpoint", ""))
+
+    with pytest.raises(SplatRefused) as refusal:
+        await builder.build(photo_intake(), AVATAR)
+
+    assert "at least 8 seconds" in " ".join(refusal.value.decision.missing)
+    # And support still sees what was uploaded, as on any other refusal.
+    assert refusal.value.decision.considered
+
+
+async def test_a_missing_reconstruct_endpoint_asks_the_family_for_nothing(endpoints):
+    """Nothing they could upload would change it, so nothing is asked of them."""
+    builder = SplatBuilder(RunPodSplatBackend("key", "", "generate-endpoint"))
+
+    with pytest.raises(SplatRefused) as refusal:
+        await builder.build(video_intake(), AVATAR)
+
+    assert refusal.value.decision.missing == ()
+    assert "our problem" in refusal.value.decision.reasoning
+
+
+async def test_a_refused_route_reads_as_a_refusal_and_not_as_a_failure(endpoints):
+    """Same class the route selector raises, so every layer above is unchanged."""
+    builder = SplatBuilder(RunPodSplatBackend("key", "reconstruct-endpoint", ""))
+
+    with pytest.raises(SplatRefused) as refusal:
+        await builder.build(photo_intake(), AVATAR)
+
+    assert refusal.value.decision.route is Route.REFUSE
+    assert refusal.value.decision.buildable is False
+
+
+def test_the_development_backend_serves_both_routes_whatever_has_shipped():
+    """An unbuilt worker image must not make a route untestable."""
+    fake = FakeSplatBackend()
+    assert fake.supports(Route.RECONSTRUCT)
+    assert fake.supports(Route.GENERATE)

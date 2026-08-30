@@ -60,6 +60,7 @@ from avatar.splat.build import (
     SplatRefused,
     SplatResult,
     plan,
+    route_unavailable,
 )
 from avatar.splat.routes import Intake, RouteDecision
 from avatar.storage.base import BlobStore
@@ -126,7 +127,15 @@ def build_splat_builder(cfg: Settings, store: BlobStore) -> SplatBuilder:
     elif cfg.splat_backend == "runpod":
         from avatar.splat.build import RunPodSplatBackend
 
-        backend = RunPodSplatBackend(cfg.runpod_api_key, cfg.runpod_endpoint_id)
+        # One endpoint per route. Not runpod_endpoint_id: that is the
+        # LivePortrait worker for base clips, and pointing a splat build at it
+        # would submit a payload it does not understand. A route whose
+        # endpoint is empty is refused in words rather than submitted.
+        backend = RunPodSplatBackend(
+            cfg.runpod_api_key,
+            cfg.runpod_splat_reconstruct_endpoint_id,
+            cfg.runpod_splat_generate_endpoint_id,
+        )
     else:
         raise ValueError(
             f"unknown splat_backend {cfg.splat_backend!r}; expected 'fake' or 'runpod'"
@@ -280,8 +289,9 @@ class SplatService:
         """Decide the route, refuse if it cannot be built, otherwise build.
 
         Raises SplatRefused when the material is not enough - carrying the
-        itemised list of what is missing - and SplatUnavailable when the set
-        is not in a state a build can start from.
+        itemised list of what is missing - or when the route that material
+        chose has no worker of ours behind it yet, and SplatUnavailable when
+        the set is not in a state a build can start from.
         """
         photo_set = (
             await db.execute(
@@ -326,7 +336,17 @@ class SplatService:
         # somehow escaped its tenant prefix is caught before a GPU is asked
         # for anything. plan() is pure, so deciding twice costs nothing but
         # the reading.
-        decision = plan(intake, photo_set.avatar_id, quality=self._quality).decision
+        planned = plan(intake, photo_set.avatar_id, quality=self._quality)
+
+        # A route with no worker of ours behind it is refused here, alongside
+        # insufficient material and for the same reason: the customer gets a
+        # sentence they can act on, no row is written that somebody has to
+        # explain, and no GPU is asked for anything. The wording is the one
+        # difference - route_unavailable says the shortfall is ours.
+        if not self._builder.supports(planned.route):
+            raise SplatRefused(route_unavailable(planned.decision))
+
+        decision = planned.decision
 
         job = TrainingJob(
             owner_id=owner_id,

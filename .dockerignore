@@ -1,0 +1,29 @@
+# Build context control.
+#
+# Without this file the context is ~6.6 GB - the virtualenv, the local avatar
+# assets and the git history - all of which is uploaded to the remote builder
+# on every deploy and none of which the image uses. The Dockerfile copies
+# pyproject.toml, uv.lock, src/, infra/piper/server.py and the entrypoint;
+# everything else here is noise or, in the case of .env, a credential that
+# must never enter a build context at all.
+
+.venv/
+assets/
+.git/
+.github/
+.pytest_cache/
+.ruff_cache/
+.tools/
+__pycache__/
+*.pyc
+*.db
+
+# Real credentials. Never copied by the Dockerfile, excluded here as well so a
+# future COPY cannot pick them up by accident.
+.env
+.env.local
+
+docs/
+tests/
+apps/
+.DS_Store

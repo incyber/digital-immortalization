@@ -117,6 +117,26 @@ class Settings(BaseSettings):
     # The platform kills a job that exceeds this and stops the worker.
     runpod_execution_timeout_s: int = 900
 
+    # Which serverless endpoint builds a Gaussian splat, one per route. Two
+    # rather than one because the two routes are two different workers:
+    # reconstruction fits Gaussians to the frames of a video, generation runs
+    # an image-to-3D model over a single anchor photograph. Different weights,
+    # different card, different runtime, different image. runpod_endpoint_id
+    # above is a third worker again - LivePortrait, for base clips - and using
+    # it for a splat build, as this once did, sends a payload to a worker that
+    # does not understand it.
+    #
+    # The reconstruct endpoint is named here rather than left to deployment
+    # because it exists and has been verified: splatworker-reconstruct:v1, on
+    # an endpoint checked against assert_endpoint_is_safe. Naming it changes
+    # nothing on a laptop - it is inert without runpod_api_key, and unreached
+    # while splat_backend is "fake".
+    runpod_splat_reconstruct_endpoint_id: str = "qzkb2bvzq51ab9"
+    # Empty on purpose: the photographs-only worker image does not build yet.
+    # A build that would need it is refused in a sentence the customer can act
+    # on rather than attempted - see route_unavailable in splat/build.py.
+    runpod_splat_generate_endpoint_id: str = ""
+
     # Signs session cookies. The default is obviously not a secret and is
     # rejected by assert_production_ready; set SESSION_SECRET in deployment.
     session_secret: str = "dev-session-secret-not-for-production"
@@ -156,6 +176,40 @@ class Settings(BaseSettings):
     # Session cookies must be Secure in deployment. False locally because
     # http://localhost is not a secure origin and the cookie would be dropped.
     cookies_secure: bool = False
+
+    # SameSite on the session cookie.
+    #
+    # "lax" is the default because the site and this API are served from one
+    # origin now: the gateway serves the built web app itself (gateway/web.py),
+    # so every request the browser makes is first-party. That matters beyond
+    # tidiness - Safari blocks third-party cookies outright and Chrome blocks
+    # them in common configurations, which produced a sign-in that returned
+    # 200, had its cookie discarded, and bounced back to the sign-in page
+    # forever.
+    #
+    # "none" is still reachable for a split-origin deployment - a site on one
+    # domain, this API on another. It only works over https, which is why the
+    # cookie helper pairs it with cookies_secure rather than trusting it alone.
+    cookie_samesite: str = "lax"
+
+    # Where the built web app lives. Empty means the copy packaged alongside
+    # the gateway (gateway/webroot), which is what a container has; a path is
+    # for serving a locally built export without reinstalling the package.
+    # Empty and absent means the gateway serves the API only, exactly as it
+    # did before it grew a front end.
+    web_root: str = ""
+
+    # Sign every visitor into one shared account instead of asking them to
+    # register. Off, and it must stay off anywhere a real family has uploaded
+    # anything: the demo account is a single tenant, so everything in it is
+    # visible to everyone who has the link. gateway/sessions.py
+    # assert_demo_mode_safe refuses to start if this is on and the database
+    # holds any account other than the demo one.
+    #
+    # Authentication is the only thing it skips. The consent gate and the
+    # synthetic-media declaration exist for legal and ethical reasons and are
+    # untouched by it.
+    demo_mode: bool = False
 
     # Whether this is a real deployment. The only thing it changes is that the
     # development-credential check becomes fatal instead of advisory, so a

@@ -1,0 +1,112 @@
+# Fly deployment for the gateway.
+#
+# ONE machine, on purpose, and it cannot be split. The gateway starts each
+# call's agent as a child process (gateway/dispatch.py, LocalProcessDispatcher)
+# and reads that avatar's plates off local disk, so a second machine would
+# answer with an agent that has no assets and a session row it cannot see.
+# Scaling this out is a rewrite of the dispatcher, not a change to this file.
+#
+# Nothing secret lives here. Every credential is held by `fly secrets set`,
+# which is why this file is safe to commit and .env is not.
+
+app = "digital-immortalization"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8000"
+
+  # This is a real deployment, so gateway/sessions.py assert_production_ready
+  # runs at import and refuses to boot on development credentials, a short
+  # LiveKit secret, a default session secret, or a cookie that would travel
+  # over plaintext. Both of these are load-bearing; neither is decoration.
+  PRODUCTION = "true"
+  COOKIES_SECURE = "true"
+
+  # The site and this API are on different domains, so the session cookie is
+  # issued samesite=none and every request from the browser is cross-site.
+  # An origin missing from this list gets a sign-in that appears to work and
+  # an anonymous session on every request after it. Localhost is kept so the
+  # web app can be developed against this API without a second deployment.
+  WEB_ORIGINS = "https://digital-immortalization.vercel.app,http://localhost:3100,http://127.0.0.1:3100"
+
+  # Speech to text. The code's default is mlx, which is Metal and Apple
+  # Silicon and does not exist on this machine; faster is CTranslate2 on CPU.
+  # "small" is a size faster-whisper resolves itself, and it is the size the
+  # image already downloaded at build time - a name it does not recognise
+  # would put a several-hundred-megabyte fetch inside somebody's first
+  # sentence, or fail outright with no network egress budget for it.
+  STT_BACKEND = "faster"
+  STT_MODEL = "small"
+
+  # Piper runs beside the gateway in the same container, over HTTP, because
+  # it is GPL and speaking to it is aggregation rather than linking.
+  TTS_BACKEND = "http"
+  TTS_URL = "http://127.0.0.1:7002"
+  PIPER_PORT = "7002"
+  PIPER_VOICES_DIR = "/voices"
+
+  RENDERER_BACKEND = "viseme"
+
+  # Blobs go to Cloudflare R2; only built avatar plates are on local disk.
+  STORAGE_BACKEND = "s3"
+  S3_REGION = "auto"
+  # Unused while the backend is s3, and set anyway. The default is the
+  # relative path assets/blobs, which resolves onto the volume only because
+  # the working directory happens to be /app. Anyone flipping the backend back
+  # to local would otherwise write a family's photographs to container-local
+  # disk and lose them on the next deploy without an error anywhere.
+  STORAGE_ROOT = "/app/assets/blobs"
+
+  # Named so that its absence is a decision rather than an oversight. There is
+  # no vision model in this deployment: the default points at an Ollama on
+  # localhost and nothing is listening. Frame sampling is off the turn path,
+  # so a call still works - it simply never sees anything. Pointing this at a
+  # served endpoint is what turns vision on.
+  VLM_BASE_URL = "http://127.0.0.1:11434"
+
+  # On the volume, not in the image. The default is ./avatar.db relative to
+  # /app, which is container-local: every deploy would take the accounts, the
+  # avatars and the consent records with it.
+  ASSETS_DIR = "/app/assets"
+  DATABASE_URL = "sqlite+aiosqlite:////app/assets/avatar.db"
+
+# Built avatars and the database. Without this every restart tells a customer
+# to upload their photographs again.
+[mounts]
+  source = "assets"
+  destination = "/app/assets"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Never stop it. A stopped machine drops the agent subprocesses of any call
+  # in flight, and a cold start here is a container that has to load a speech
+  # model before it can answer.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "60s"
+    method = "GET"
+    path = "/health"
+
+[deploy]
+  # One machine holding one volume: there is no second host to shift traffic
+  # to, so a rolling update would only pretend. Immediate replaces it and
+  # takes the few seconds of downtime honestly.
+  strategy = "immediate"
+
+[[vm]]
+  size = "performance-2x"
+  # Two dedicated cores and 4 GB. Speech recognition is the CPU-bound part and
+  # a shared core is throttled exactly when a call needs it. Swap is a floor
+  # under the model loads, not a substitute for memory: each concurrent call
+  # spawns an agent that loads its own copy of the speech model, so this sizing
+  # is honest for roughly two calls at once and not more.
+  swap_size_mb = 2048

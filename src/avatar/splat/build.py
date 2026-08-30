@@ -15,6 +15,13 @@ and a cancel on the way out of a failure, and both are courtesies - the
 platform's own execution timeout stops the worker whether or not this process
 survives to ask.
 
+*A route we have not shipped refuses in words.* One endpoint per route, because
+the two routes are two different worker images. A route with no endpoint behind
+it is answered the way insufficient material is - a sentence the customer can
+act on, raised before anything is submitted - rather than attempted and failed.
+Saying "we have not built that yet" is honest; a 500 is not, and a payload sent
+to the wrong worker is worse than either.
+
 *What was invented is stated, not discovered.* The photographs-only route fills
 in angles no camera captured. That is the honest way to build a splat from an
 album and it is also the thing a family must never learn later, so the measured
@@ -44,7 +51,13 @@ from avatar.gpu.serverless import (
     JobState,
     ServerlessClient,
 )
-from avatar.splat.routes import Intake, Route, RouteDecision, choose_route
+from avatar.splat.routes import (
+    MIN_VIDEO_SECONDS,
+    Intake,
+    Route,
+    RouteDecision,
+    choose_route,
+)
 from avatar.storage.base import BlobStore
 from avatar.storage.keys import asset_key, belongs_to
 
@@ -92,6 +105,58 @@ class SplatRefused(SplatError):
 
 class SplatBuildError(SplatError):
     """The build was attempted and did not produce a splat."""
+
+
+def route_unavailable(decision: RouteDecision) -> RouteDecision:
+    """The refusal for a route we have not shipped, in our words not theirs.
+
+    A route with no worker behind it is a limit of what we have built, and the
+    customer must be told that rather than left to conclude their photographs
+    were the problem. So this reads as our shortfall, and it still names the
+    one thing they could do about it - because a refusal that offers no next
+    step is a dead end even when it is honest.
+
+    Returned as a REFUSE decision rather than raised as its own error on
+    purpose. Every layer above already knows how to show a refusal: the
+    service raises SplatRefused before a job row exists, and the HTTP surface
+    answers 200 with guidance. A new exception type would need each of those
+    taught again, and the family would meet a 500 in the meantime.
+
+    The evidence trail from the original decision is carried through, so
+    support still sees what was uploaded when a family asks why.
+    """
+    if decision.route is Route.GENERATE:
+        return RouteDecision(
+            route=Route.REFUSE,
+            reasoning=(
+                "We can only build a likeness from video at the moment. Building "
+                "one from photographs alone is a route we have not finished yet, "
+                "so this is a limit of what we have built rather than anything "
+                "wrong with the photographs you sent."
+            ),
+            missing=(
+                (
+                    f"a video of at least {MIN_VIDEO_SECONDS:.0f} seconds where "
+                    "their face is visible, which is the only material we can "
+                    "build from today"
+                ),
+            ),
+            considered=decision.considered,
+        )
+
+    # The reconstruct route, unconfigured. Nothing the customer can upload
+    # changes it, so nothing is asked of them: `missing` stays empty and the
+    # sentence they are shown is this one.
+    return RouteDecision(
+        route=Route.REFUSE,
+        reasoning=(
+            "We cannot build this likeness right now: the part of our system "
+            "that reconstructs a face from video is not available. That is our "
+            "problem rather than anything to do with what you uploaded, and "
+            "nothing you sent has been lost. Please try again shortly."
+        ),
+        considered=decision.considered,
+    )
 
 
 class Quality(str, Enum):
@@ -429,6 +494,14 @@ class SplatBackend(Protocol):
     def name(self) -> str:
         """Recorded on the job row, so a build can be traced to a backend."""
 
+    def supports(self, route: Route) -> bool:
+        """Whether this backend has somewhere to send this route's work.
+
+        Asked before anything is submitted. A backend that cannot serve a
+        route says so here and is refused in words, rather than discovering it
+        at submit and surfacing as a failed build the customer cannot read.
+        """
+
     async def submit(self, job: SplatJob) -> str:
         """Queue the build. Returns immediately with an external id."""
 
@@ -473,6 +546,15 @@ class FakeSplatBackend:
     @property
     def name(self) -> str:
         return "fake"
+
+    def supports(self, route: Route) -> bool:
+        """Both routes, always. There is no image to be missing.
+
+        Which is exactly why the development backend is the one the whole
+        customer flow is built against: an unshipped worker must not make a
+        route untestable.
+        """
+        return True
 
     async def submit(self, job: SplatJob) -> str:
         if self._fail_in == "submit":
@@ -519,7 +601,7 @@ class FakeSplatBackend:
 
 
 class RunPodSplatBackend:
-    """The real build, on RunPod Serverless.
+    """The real build, on RunPod Serverless. One endpoint per route.
 
     No second GPU approach: this is avatar/gpu/serverless.py, with the same
     guarantees doing the same work. Nothing is allocated between jobs, the
@@ -527,41 +609,111 @@ class RunPodSplatBackend:
     alive, and the cancel on the way out of a failure is a courtesy on top of
     that rather than the thing being relied on.
 
+    Two endpoints rather than one because the two routes are two different
+    workers. Reconstruction fits Gaussians to the frames of a video; generation
+    runs an image-to-3D model over a single anchor photograph. Different
+    weights, different card, different runtime, different image - a single
+    endpoint id could only ever have been right for one of them, and pointing
+    the other at it would submit a payload the worker does not understand.
+
+    An endpoint that is not configured is a first-class state, not an error:
+    `supports` is asked before anything is submitted, so a route we have not
+    shipped is refused in a sentence rather than discovered as a failed build.
+
     The client is injectable so the whole of this class - the poll loop, the
     timeout, the cancel, the parsing - is tested without a network or an
-    account.
+    account. An injected client stands in for every endpoint, because none of
+    those behaviours differ by route.
     """
 
     def __init__(
         self,
         api_key: str = "",
-        endpoint_id: str = "",
+        reconstruct_endpoint_id: str = "",
+        generate_endpoint_id: str = "",
         *,
         client: ServerlessClient | None = None,
         poll_s: float = 2.0,
     ):
-        self._client = client if client is not None else ServerlessClient(api_key, endpoint_id)
+        self._api_key = api_key
+        self._endpoints: dict[Route, str] = {
+            Route.RECONSTRUCT: reconstruct_endpoint_id,
+            Route.GENERATE: generate_endpoint_id,
+        }
+        self._override = client
+        # Built on first use rather than in the constructor, so a deployment
+        # that has one of the two endpoints starts and serves the route it can
+        # instead of refusing to start at all.
+        self._clients: dict[Route, ServerlessClient] = {}
+        # Which route each submitted job went out on, so a cancel reaches the
+        # endpoint that is running it. A cancel sent to the other endpoint is a
+        # cancel that does not happen, and the whole posture here is that a
+        # failure leaves nothing running.
+        self._routes: dict[str, Route] = {}
         self._poll_s = poll_s
 
     @property
     def name(self) -> str:
         return "runpod"
 
+    def supports(self, route: Route) -> bool:
+        return self._override is not None or bool(self._endpoints.get(route, ""))
+
+    def endpoint_for(self, route: Route) -> str:
+        """Which endpoint this route's work goes to. Empty when none is set."""
+        return self._endpoints.get(route, "")
+
+    def _client_for(self, route: Route) -> ServerlessClient:
+        if self._override is not None:
+            return self._override
+        endpoint = self._endpoints.get(route, "")
+        if not endpoint:
+            # Only reachable if something submitted without asking supports()
+            # first. Raised rather than refused because by this point it is a
+            # programming error, not a thing to tell a customer.
+            raise SplatBuildError(
+                f"no serverless endpoint is configured for the {route.value} route"
+            )
+        client = self._clients.get(route)
+        if client is None:
+            client = ServerlessClient(self._api_key, endpoint)
+            self._clients[route] = client
+        return client
+
     async def submit(self, job: SplatJob) -> str:
         # On a thread because the client is blocking and the caller is usually
         # the gateway's event loop. The first version of the sibling GPU path
         # polled inline and stopped every other request in the process,
         # including the one asking how the build was going.
-        return await asyncio.to_thread(self._client.submit, job.payload())
+        client = self._client_for(job.route)
+        external_id = await asyncio.to_thread(client.submit, job.payload())
+        self._routes[external_id] = job.route
+        return external_id
 
     async def collect(self, external_id: str, job: SplatJob, *, wait_s: float) -> SplatResult:
-        result = await asyncio.to_thread(self._wait, external_id, wait_s)
+        client = self._client_for(job.route)
+        result = await asyncio.to_thread(self._wait, client, external_id, wait_s)
+        # Only on the way out with a result: a build that raised is about to be
+        # cancelled by the builder, and the cancel needs this to find it.
+        self._routes.pop(external_id, None)
         return self._result_from(result, job)
 
     async def cancel(self, external_id: str) -> None:
-        await asyncio.to_thread(self._client.cancel, external_id)
+        route = self._routes.pop(external_id, None)
+        if route is None:
+            # A job this process did not submit - a gateway restart, most
+            # likely. There is no way to know which endpoint holds it, and
+            # guessing would send the cancel to the wrong one. The platform's
+            # own execution timeout stops it, which is the guarantee that was
+            # doing the real work anyway.
+            logger.warning(
+                f"cannot cancel splat build {external_id}: this process does not "
+                "know which endpoint it was submitted to"
+            )
+            return
+        await asyncio.to_thread(self._client_for(route).cancel, external_id)
 
-    def _wait(self, external_id: str, wait_s: float) -> JobResult:
+    def _wait(self, client: ServerlessClient, external_id: str, wait_s: float) -> JobResult:
         """Poll until terminal, then stop caring; cancel and raise on timeout.
 
         Written here rather than using ServerlessClient.run because run submits
@@ -570,11 +722,11 @@ class RunPodSplatBackend:
         """
         deadline = time.monotonic() + wait_s
         while True:
-            result = self._client.status(external_id)
+            result = client.status(external_id)
             if result.state.terminal:
                 return result
             if time.monotonic() >= deadline:
-                self._client.cancel(external_id)
+                client.cancel(external_id)
                 raise SplatBuildError(
                     f"splat build {external_id} did not finish within {wait_s:.0f}s"
                 )
@@ -642,6 +794,14 @@ class SplatBuilder:
         """Jobs this builder is currently waiting on. Empty between builds."""
         return tuple(self._pending)
 
+    def supports(self, route: Route) -> bool:
+        """Whether the backend behind this builder can build that route.
+
+        Exposed so a caller can refuse before it writes a job row, rather than
+        starting a build it will have to fail a moment later.
+        """
+        return self._backend.supports(route)
+
     async def build(
         self,
         intake: Intake,
@@ -651,6 +811,12 @@ class SplatBuilder:
     ) -> SplatResult:
         """Build this person's splat, or say why it cannot be built."""
         job = plan(intake, avatar_id, quality=quality)
+        if not self._backend.supports(job.route):
+            # Refused before submit, so nothing is allocated, nothing is
+            # pending and there is nothing to cancel. The material was fine;
+            # what is missing is a worker of ours, and route_unavailable says
+            # so in those words.
+            raise SplatRefused(route_unavailable(job.decision))
         logger.info(
             f"splat for avatar {avatar_id}: {job.route.value} at {quality.value} "
             f"from {job.views} views"

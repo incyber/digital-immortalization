@@ -20,8 +20,12 @@ import cv2
 import numpy as np
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from avatar.config import Settings
+from avatar.gateway.csrf import REQUIRED_HEADER, REQUIRED_VALUE
 from avatar.gateway.models import (
     Avatar,
     Base,
@@ -32,13 +36,23 @@ from avatar.gateway.models import (
     TrainingStatus,
     User,
 )
+from avatar.gateway.routes_splat import build_router
 from avatar.gateway.tenancy import TenantError
-from avatar.splat.build import FakeSplatBackend, Quality, SplatBuilder, SplatRefused
-from avatar.splat.routes import Route
+from avatar.gpu.serverless import JobResult, JobState
+from avatar.splat.build import (
+    FakeSplatBackend,
+    Quality,
+    RunPodSplatBackend,
+    SplatBuilder,
+    SplatRefused,
+    route_unavailable,
+)
+from avatar.splat.routes import Intake, Route, choose_route
 from avatar.splat.service import (
     PROVIDER_PREFIX,
     SplatService,
     SplatUnavailable,
+    build_splat_builder,
     intake_for,
 )
 from avatar.storage.keys import photo_key, source_clip_key
@@ -559,3 +573,185 @@ async def test_an_identity_training_run_is_not_readable_as_a_splat_build(
     service = service_for(store, sessions)
     with pytest.raises(TenantError):
         await service.read(db, training.id, photo_set.owner_id)
+
+
+# --- a route we have not shipped is refused, not attempted -----------------
+
+
+@pytest.fixture
+def no_gpu_may_be_reached(monkeypatch):
+    """Reaching RunPod at all fails the test it happens in.
+
+    Sharper than counting job rows: a refusal that has already opened a client
+    or submitted a payload has already cost something, whatever it does next.
+    """
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a refused build must never reach the GPU provider")
+
+    monkeypatch.setattr("avatar.splat.build.ServerlessClient", refuse)
+
+
+def runpod_service(store, sessions, *, reconstruct="reconstruct-endpoint", generate=""):
+    backend = RunPodSplatBackend("key", reconstruct, generate)
+    return SplatService(SplatBuilder(backend), store, sessions)
+
+
+async def test_a_photographs_only_set_is_refused_while_that_route_has_no_worker(
+    db, store, sessions, photo_set, no_gpu_may_be_reached
+):
+    await add_photos(db, photo_set, 20)
+    service = runpod_service(store, sessions)
+
+    with pytest.raises(SplatRefused) as refusal:
+        await service.start(db, photo_set.id, photo_set.owner_id)
+
+    assert refusal.value.decision.route is Route.REFUSE
+    assert "only build a likeness from video" in refusal.value.decision.reasoning
+
+
+async def test_that_refusal_leaves_no_job_row_and_nothing_running(
+    db, store, sessions, photo_set, no_gpu_may_be_reached
+):
+    """Same posture as a refusal for thin material: nothing to explain later."""
+    await add_photos(db, photo_set, 20)
+    service = runpod_service(store, sessions)
+
+    with pytest.raises(SplatRefused):
+        await service.start(db, photo_set.id, photo_set.owner_id)
+
+    assert service.running == ()
+    jobs = (await db.execute(TrainingJob.__table__.select())).all()
+    assert jobs == []
+
+
+@pytest.fixture
+def worker_reached(monkeypatch):
+    """A RunPod endpoint that completes whatever it is given, remembering which.
+
+    Patched over the class the backend constructs so the whole path is real -
+    route chosen, endpoint picked, payload submitted, result parsed, row and
+    disclosure written - with nothing rented.
+    """
+    reached: list[str] = []
+
+    class Endpoint:
+        def __init__(self):
+            self._payload: dict = {}
+
+        def submit(self, payload: dict) -> str:
+            self._payload = payload
+            return "runpod-000001"
+
+        def status(self, job_id: str) -> JobResult:
+            return JobResult(
+                id=job_id,
+                state=JobState.COMPLETED,
+                output={"splat_key": self._payload["output_key"], "gaussians": 500_000},
+                execution_ms=420_000,
+            )
+
+        def cancel(self, job_id: str) -> None:
+            pass
+
+    def make(api_key: str, endpoint_id: str) -> Endpoint:
+        reached.append(endpoint_id)
+        return Endpoint()
+
+    monkeypatch.setattr("avatar.splat.build.ServerlessClient", make)
+    return reached
+
+
+async def test_a_video_set_builds_on_the_reconstruct_endpoint_that_exists(
+    db, store, sessions, photo_set, worker_reached
+):
+    """One unshipped worker must not take the route that does exist with it."""
+    await add_clip(store, photo_set, seconds=12.0)
+    await add_photos(db, photo_set, 20, frames=True)
+    service = runpod_service(store, sessions)
+
+    started = await service.start(db, photo_set.id, photo_set.owner_id)
+    result = await finished(service, db, started.job_id, photo_set.owner_id)
+
+    assert started.decision.route is Route.RECONSTRUCT
+    assert result["status"] == "succeeded"
+    assert result["measured_fraction"] == 1.0
+    assert worker_reached == ["reconstruct-endpoint"]
+
+
+def test_the_runpod_builder_is_wired_to_one_endpoint_per_route(tmp_path):
+    """What ships today: reconstruction has a verified worker, generation does not."""
+    cfg = Settings(splat_backend="runpod", runpod_api_key="key")
+    builder = build_splat_builder(cfg, LocalBlobStore(tmp_path))
+
+    assert builder.backend_name == "runpod"
+    assert builder.supports(Route.RECONSTRUCT)
+    assert not builder.supports(Route.GENERATE)
+
+
+def test_the_splat_endpoints_are_not_the_endpoint_that_animates_a_photograph():
+    """runpod_endpoint_id is LivePortrait, and a splat payload means nothing to it."""
+    cfg = Settings(runpod_endpoint_id="liveportrait-endpoint")
+
+    assert cfg.runpod_splat_reconstruct_endpoint_id != cfg.runpod_endpoint_id
+    assert cfg.runpod_splat_reconstruct_endpoint_id, "the verified splat worker"
+
+
+# --- the refusal reaches the API in the shape the web app already reads ----
+
+
+class RefusingService:
+    """A service that only refuses, standing in at the HTTP edge."""
+
+    def __init__(self, exc: SplatRefused):
+        self._exc = exc
+
+    async def start(self, db, photo_set_id, owner_id):
+        raise self._exc
+
+
+async def refusal_over_http(exc: SplatRefused) -> tuple[int, dict]:
+    app = FastAPI()
+    app.include_router(build_router(lambda: "tenant-a", lambda: None, RefusingService(exc)))
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={REQUIRED_HEADER: REQUIRED_VALUE},
+    ) as client:
+        response = await client.post("/api/photo-sets/set-1/splat")
+    return response.status_code, response.json()
+
+
+def an_intake(photographs: int) -> Intake:
+    return Intake(
+        tenant_id="tenant-a",
+        photo_set_id="set-1",
+        photo_keys=tuple(
+            photo_key("tenant-a", "set-1", f"photo-{i}.jpg") for i in range(photographs)
+        ),
+    )
+
+
+async def test_an_unshipped_route_answers_in_the_same_shape_as_thin_material():
+    """So the web app needs no change to show it, and no family meets a 500."""
+    thin = SplatRefused(choose_route(an_intake(1)))
+    unshipped = SplatRefused(route_unavailable(choose_route(an_intake(20))))
+
+    thin_status, thin_body = await refusal_over_http(thin)
+    unshipped_status, unshipped_body = await refusal_over_http(unshipped)
+
+    assert thin_status == unshipped_status == 200
+    assert thin_body.keys() == unshipped_body.keys()
+    assert unshipped_body["status"] == "refused"
+    assert unshipped_body["buildable"] is False
+
+
+async def test_the_guidance_a_photographs_only_family_reads_is_one_plain_sentence():
+    unshipped = SplatRefused(route_unavailable(choose_route(an_intake(20))))
+
+    _, body = await refusal_over_http(unshipped)
+
+    assert "at least 8 seconds" in body["guidance"]
+    assert "face is visible" in body["guidance"]
+    # And the trail support reads when a family asks why survives the trip.
+    assert any("photographs accepted: 20" in line for line in body["considered"])
