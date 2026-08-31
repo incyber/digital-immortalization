@@ -207,9 +207,10 @@ SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 MAX_ASSET_BYTES = 512 * 1024 * 1024
 MAX_TOTAL_BYTES = 1024 * 1024 * 1024
 
-# Most photographs a generated build will look at. Beyond this the appearance
+# Most photographs a *generated* build will look at. Beyond this the appearance
 # correction is re-seeing the same face and the marginal photograph costs a
-# landmark pass for nothing.
+# landmark pass for nothing. Applied in the generate branch only - the
+# reconstruct route reads a video and nothing else.
 MAX_PHOTOS = 40
 
 ROUTES = ("reconstruct", "generate")
@@ -402,16 +403,24 @@ def _splat(payload: dict) -> dict:
     raw_photos = payload.get("photo_keys") or []
     if not isinstance(raw_photos, list):
         raise TaskError("photo_keys must be a list of storage keys")
-    if len(raw_photos) > MAX_PHOTOS:
-        raise TaskError(f"more than {MAX_PHOTOS} photographs were supplied")
+    # Confined to the tenant whatever the route, because that is a security
+    # check and applies to every key that arrives. The *count* is checked
+    # per-route below: a reconstruct build never reads these.
     photo_keys = [_key("photo_key", key, tenant_id) for key in raw_photos]
 
     # Every key is resolved before storage is touched, so a job naming a key
     # outside its tenant is told exactly that rather than being told about the
     # first unrelated thing the worker happens to trip over.
     if route == "reconstruct":
+        # The video is the whole input. Any photo_keys that came along are
+        # unread here, and capping their number rejected a real build over
+        # photographs it was never going to open: a 32-second clip yields
+        # around sixty usable frames, the orchestrator sent them, and the
+        # worker refused a video it had not looked at yet.
         sources = [_key("video_key", payload.get("video_key"), tenant_id)]
     else:
+        if len(photo_keys) > MAX_PHOTOS:
+            raise TaskError(f"more than {MAX_PHOTOS} photographs were supplied")
         anchor_key = _key("anchor_key", payload.get("anchor_key"), tenant_id)
         if anchor_key not in photo_keys:
             raise TaskError("the anchor photograph is not among the photographs supplied")
